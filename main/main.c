@@ -2016,15 +2016,175 @@ void app_main(void) {
 					if (write) {
 						if (tmp[index + 1] == 'H' || tmp[index + 1] == 'h') {
 							printf("Writing HIGH on D%d\n", D);
+							if((D >= 0 && D <=5) || D == 8 || D == 9) { // write to slave
+								switch(D) {
+									// DO_9, DO_8, DO_5, DO_4, DO_3, DO_2, DO_1, DO_0 on slave, master_to_slave_buffer[1]
+									case 0:
+										master_to_slave_buffer[1] |= 0x01;
+										break;
+									case 1:
+										master_to_slave_buffer[1] |= 0x02;
+										break;
+									case 2:
+										master_to_slave_buffer[1] |= 0x04;
+										break;
+									case 3:
+										master_to_slave_buffer[1] |= 0x08;
+										break;
+									case 4:
+										master_to_slave_buffer[1] |= 0x10;
+										break;
+									case 5:
+										master_to_slave_buffer[1] |= 0x20;
+										break;
+									case 8:
+										master_to_slave_buffer[1] |= 0x40;
+										break;
+									case 9:
+										master_to_slave_buffer[1] |= 0x80;
+										break;
+								}
+							}
+							else if ((D<=19 && D>=10) || D==7 || D==6){ 
+								// MSB to LSB: DO_19 to DO_10, DO_7, DO_6, master_do
+								switch(D) {
+									case 6:
+										master_do |= 0x0001;
+										break;
+									case 7:
+										master_do |= 0x0002;
+										break;
+									case 10:
+										master_do |= 0x0004;
+										break;
+									case 11:
+										master_do |= 0x0008;
+										break;
+									case 12:
+										master_do |= 0x0010;
+										break;
+									case 13:
+										master_do |= 0x0020;
+										break;
+									case 14:
+										master_do |= 0x0040;
+										break;
+									case 15:
+										master_do |= 0x0080;
+										break;
+									case 16:
+										master_do |= 0x0100;
+										break;
+									case 17:
+										master_do |= 0x0200;
+										break;
+									case 18:
+										master_do |= 0x0400;
+										break;
+									case 19:
+										master_do |= 0x0800;
+										break;
+								}
+							}
+							else {
+								printf("No such kind of IO\n");
+							}
 							write = false;
 						} else if (tmp[index + 1] == 'L' || tmp[index + 1] == 'l') {
 							printf("Writing LOW on D%d\n", D);
+							if((D >= 0 && D <=5) || D == 8 || D == 9) { // write to slave
+								switch(D) {
+									case 0:
+										master_to_slave_buffer[1] &= 0xFE;
+										break;
+									case 1:
+										master_to_slave_buffer[1] &= 0xFD;
+										break;
+									case 2:
+										master_to_slave_buffer[1] &= 0xFB;
+										break;
+									case 3:
+										master_to_slave_buffer[1] &= 0xF7;
+										break;
+									case 4:
+										master_to_slave_buffer[1] &= 0xEF;
+										break;
+									case 5:
+										master_to_slave_buffer[1] &= 0xDF;
+										break;
+									case 8:
+										master_to_slave_buffer[1] &= 0xBF;
+										break;
+									case 9:
+										master_to_slave_buffer[1] &= 0x7F;
+										break;
+								}
+							}
+							else if ((D<=19 && D>=10) || D==7 || D==6){ 
+								// MSB to LSB: DO_19 to DO_10, DO_7, DO_6, master_do
+								switch(D) {
+									case 6:
+										master_do &= 0xFFFE;
+										break;
+									case 7:
+										master_do &= 0xFFFD;
+										break;
+									case 10:
+										master_do &= 0xFFFB;
+										break;
+									case 11:
+										master_do &= 0xFFF7;
+										break;
+									case 12:
+										master_do &= 0xFFEF;
+										break;
+									case 13:
+										master_do &= 0xFFDF;
+										break;
+									case 14:
+										master_do &= 0xFFBF;
+										break;
+									case 15:
+										master_do &= 0xFF7F;
+										break;
+									case 16:
+										master_do &= 0xFEFF;
+										break;
+									case 17:
+										master_do &= 0xFDFF;
+										break;
+									case 18:
+										master_do &= 0xFBFF;
+										break;
+									case 19:
+										master_do &= 0xF7FF;
+										break;
+								}
+							}
+							else {
+								printf("No such kind of IO\n");
+							}
 							write = false;
 						} else {
 							printf("INVALID!!\n");
 						}
 						} else if (read) {
-							printf("Reading D%d\n", D);
+							bool status = false;
+							if(D <=23 && D>=16) {
+								status = slave_to_master_buffer[0] & (0x01 << (D-16));
+								printf("Read Value of D%d : %d\n", D, status);
+							}
+							else if (D<=15 && D>=8) {
+								status = slave_to_master_buffer[1] & (0x01 << (D-8));
+								printf("Read Value of D%d : %d\n", D, status);
+							}
+							else if (D<=7 && D>=0) {
+								status = slave_to_master_buffer[1] & (0x01 << (D));
+								printf("Read Value of D%d : %d\n", D, status);
+							}
+							else {
+								printf("No such kind of IO\n");
+							}
 							read = false;
 						}
 						else {
