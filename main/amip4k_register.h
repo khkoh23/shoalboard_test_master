@@ -1,0 +1,147 @@
+#ifndef AMIP4k_REGISTER_H
+#define AMIP4k_REGISTER_H
+
+#define AMIP4K_MVAL_A 0x00
+#define AMIP4K_MVAL_B 0x01
+#define AMIP4K_MVAL_C 0x02
+#define AMIP4K_MVAL_D 0x03
+#define AMIP4K_CNT_A 0x04
+#define AMIP4K_CNT_B 0x05
+#define AMIP4K_CNT_C 0x06
+#define AMIP4K_CNT_D 0x07
+#define AMIP4K_STAT_A 0x08
+#define AMIP4K_STAT_B 0x09
+#define AMIP4K_STAT_C 0x0A
+#define AMIP4K_STAT_D 0x0B
+#define AMIP4K_CFG1_A 0x0C // 0b00001100
+#define AMIP4K_CFG1_B 0x0D
+#define AMIP4K_CFG1_C 0x0E
+#define AMIP4K_CFG1_D 0x0F
+#define AMIP4K_CFG2_A 0x10
+#define AMIP4K_CFG2_B 0x11
+#define AMIP4K_CFG2_C 0x12
+#define AMIP4K_CFG2_D 0x13
+#define AMIP4K_CFG3_A 0x14
+#define AMIP4K_CFG3_B 0x15
+#define AMIP4K_CFG3_C 0x16
+#define AMIP4K_CFG3_D 0x17
+#define AMIP4K_CFG4_A 0x18
+#define AMIP4K_CFG4_B 0x19
+#define AMIP4K_CFG4_C 0x1A
+#define AMIP4K_CFG4_D 0x1B
+#define AMIP4K_CNTRLG_A 0x1C
+#define AMIP4K_CNTRLG_B 0x1D
+#define AMIP4K_CNTRLG_C 0x1E
+#define AMIP4K_CNTRLG_D 0x1F
+#define AMIP4K_CNTRLO_A 0x20
+#define AMIP4K_CNTRLO_B 0x21
+#define AMIP4K_CNTRLO_C 0x22
+#define AMIP4K_CNTRLO_D 0x23
+#define AMIP4K_PRE_ST_A 0x24
+#define AMIP4K_PRE_ST_B 0x25
+#define AMIP4K_PRE_ST_C 0x26
+#define AMIP4K_PRE_ST_D 0x27
+#define AMIP4K_PRE_MT_A 0x28
+#define AMIP4K_PRE_MT_B 0x29
+#define AMIP4K_PRE_MT_C 0x2A
+#define AMIP4K_PRE_MT_D 0x2B
+#define AMIP4K_CFGIUW_A 0x2E
+#define AMIP4K_CFGIUW_B 0x2F
+#define AMIP4K_CFGSSI_A 0x30
+#define AMIP4K_CFGSSI_B 0x31
+#define AMIP4K_CFGSSI_C 0x32
+#define AMIP4K_CFGSSI_D 0x33
+#define AMIP4K_CFGLDR_A 0x34
+#define AMIP4K_CFGLDR_B 0x35
+#define AMIP4K_CFGLDR_C 0x36
+#define AMIP4K_CFGLDR_D 0x37
+#define AMIP4K_CFGLDR2_A 0x38
+#define AMIP4K_CFGLDR2_B 0x39
+#define AMIP4K_CFGLDR2_C 0x3A
+#define AMIP4K_CFGLDR2_D 0x3B
+#define AMIP4K_EEP_DAT_A 0x48
+#define AMIP4K_EEP_DAT_B 0x49
+#define AMIP4K_EEP_ADR 0x4A
+#define AMIP4K_EEP_OPC 0x4B
+#define AMIP4K_CFGTM_A 0x4C
+#define AMIP4K_CFGTM_B 0x4D
+#define AMIP4K_CFGTM_C 0x4E
+#define AMIP4K_CFGTM_D 0x4F
+#define AMIP4K_CMD_A 0x50
+#define AMIP4K_CMD_B 0x51
+#define AMIP4K_TSTCMD_A 0x52
+#define AMIP4K_TSTCMD_B 0x53
+#define AMIP4K_CFGEEP_A 0x54
+#define AMIP4K_CFGEEP_B 0x55
+#define AMIP4K_CFGEEP_C 0x56
+#define AMIP4K_CFGEEP_D 0x57
+#define AMIP4K_POSIT_A 0x80
+#define AMIP4K_POSIT_B 0x81
+#define AMIP4K_POSIT_C 0x82
+#define AMIP4K_POSIT_D 0x83
+#define AMIP4K_ADC_A 0x84
+#define AMIP4K_ADC_B 0x85
+#define AMIP4K_ADC_C 0x86
+#define AMIP4K_ADC_D 0x87
+#define AMIP4K_CADC_A 0x88
+#define AMIP4K_CADC_B 0x89
+#define AMIP4K_CADC_C 0x8A
+#define AMIP4K_CADC_D 0x8B
+#define AMIP4K_IP1_A 0x8C
+#define AMIP4K_IP1_B 0x8D
+#define AMIP4K_IP1_C 0x8E
+#define AMIP4K_IP1_D 0x8F
+#define AMIP4K_IP2_A 0x90
+#define AMIP4K_IP2_B 0x91
+#define AMIP4K_IP2_C 0x92
+#define AMIP4K_IP2_D 0x93
+#define AMIP4K_Korrekturwert_SC_A 0x94 //Correction value
+#define AMIP4K_Korrekturwert_SC_B 0x95
+#define AMIP4K_Korrekturwert_SC_C 0x96
+#define AMIP4K_Korrekturwert_SC_D 0x97
+#define AMIP4K_Korrekturwert_360_A 0x98
+#define AMIP4K_Korrekturwert_360_B 0x99
+#define AMIP4K_Korrekturwert_360_C 0x9A
+#define AMIP4K_Korrekturwert_360_D 0x9B
+#define AMIP4K_LDR_OUT_A 0x9C
+#define AMIP4K_LDR_OUT_B 0x9D
+#define AMIP4K_LDR_OUT_C 0x9E
+#define AMIP4K_LDR_OUT_D 0x9F
+
+#define Interpolation_rate_4096 0b10000
+#define Interpolation_rate_4000 0b00000
+#define Interpolation_rate_3200 0b01000
+#define Interpolation_rate_2560 0b11000
+#define Interpolation_rate_2048 0b10001
+#define Interpolation_rate_2000 0b00001
+#define Interpolation_rate_1600 0b01001
+#define Interpolation_rate_1280 0b11001
+#define Interpolation_rate_1024 0b10010
+#define Interpolation_rate_1000 0b00010
+#define Interpolation_rate_800 0b01010
+#define Interpolation_rate_640 0b11010
+#define Interpolation_rate_512 0b10011
+#define Interpolation_rate_500 0b00011
+#define Interpolation_rate_400 0b01011
+#define Interpolation_rate_320 0b11011
+#define Interpolation_rate_256 0b10100
+#define Interpolation_rate_250 0b00100
+#define Interpolation_rate_200 0b01100
+#define Interpolation_rate_160 0b11100
+#define Interpolation_rate_128 0b10101
+#define Interpolation_rate_125 0b00101
+#define Interpolation_rate_100 0b01101
+#define Interpolation_rate_80 0b11101
+#define Interpolation_rate_64 0b10110
+#define Interpolation_rate_50 0b01110
+#define Interpolation_rate_40 0b11110
+#define Interpolation_rate_32 0b10111 // bit 0~2 used for IR_SUM calc to set rate under 20
+#define Interpolation_rate_25 0b01111
+#define Interpolation_rate_20 0b11111
+// IR_SUM(3:0) = IR(2:0) + IRDiv2(2:0)
+#define Interpolation_rate_16 0b001 // IRDiv2 for IR_SUM calc
+#define Interpolation_rate_8 0b010 // IRDiv2 for IR_SUM calc
+#define Interpolation_rate_4 0b011 // IRDiv2 for IR_SUM calc
+
+
+#endif // AM_IP_4k_REGISTER_H
