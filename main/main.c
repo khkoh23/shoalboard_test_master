@@ -21,6 +21,10 @@
 #include "driver/spi_master.h"
 #include "driver/temperature_sensor.h"
 
+#include "esp_console.h"
+#include "esp_vfs_dev.h"
+#include "esp_vfs_fat.h"
+
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
@@ -1969,4 +1973,72 @@ void app_main(void) {
 
 	ESP_LOGI(SHOALBOARD_TEST_TAG, "Create shoalboard test task");
 	xTaskCreate(shoalboard_test_task, "shoalboard_test_task", 16000, NULL, 1, NULL);
+
+	setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    ESP_ERROR_CHECK(uart_driver_install(CONFIG_ESP_CONSOLE_UART_NUM, 256, 0, 0, NULL, 0));
+    esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+    esp_vfs_dev_uart_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
+
+	bool write = false;
+	bool read = false;
+    while(1){
+		char tmp[10] = {};
+		uint8_t D;
+		printf("\nWrite the commdand to execute\n");
+		printf("for writing IO -> W-DXX_H (w-dXX_h) or W-DXX_L (w-dXX_l)\n");
+		printf("for reading IO -> R-DXX (r-dXX)}\n");
+		printf("p2 for PASS2, p1 for PASS1, bms for BMS, bootkey for BOOTKEY\n");
+		if (scanf("%9s", tmp) == 1) {
+			printf("Received : %s\n", tmp);
+			if(strcmp(tmp, "p2") == 0 || strcmp(tmp, "p1") == 0 || strcmp(tmp, "bms") == 0 || strcmp(tmp, "bootkey") == 0) {
+				// something
+			}
+			else {
+				write = (tmp[0] == 'W' || tmp[0] == 'w') ? 1 : 0;
+				read = (tmp[0] == 'R' || tmp[0] == 'r') ? 1 : 0;
+				uint8_t index = 2;
+				uint8_t digits = 0;
+				if(tmp[1] == '-') {
+					while(tmp[index] != '_' && tmp[index] != '\0') {
+						++digits;
+						++index;
+					}
+					digits--;
+					if (digits > 0 && digits < 3) { // valid iff digits==1,2
+						if (digits == 2) {
+							D = (tmp[3] - '0') * 10 + (tmp[4] - '0'); 
+						} else {
+							D = tmp[3] - '0'; 
+						}
+
+					if (write) {
+						if (tmp[index + 1] == 'H' || tmp[index + 1] == 'h') {
+							printf("Writing HIGH on D%d\n", D);
+							write = false;
+						} else if (tmp[index + 1] == 'L' || tmp[index + 1] == 'l') {
+							printf("Writing LOW on D%d\n", D);
+							write = false;
+						} else {
+							printf("INVALID!!\n");
+						}
+						} else if (read) {
+							printf("Reading D%d\n", D);
+							read = false;
+						}
+						else {
+							printf("INVALID!!\n");
+						}
+					}
+					else {
+						printf("No such kind of IO\n");
+					}
+				}
+				else {
+					printf("INVALID!!\n");
+				}
+			}
+    	}	
+    }
 }
