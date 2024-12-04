@@ -25,36 +25,9 @@
 #include "esp_vfs_dev.h"
 #include "esp_vfs_fat.h"
 
-#include <rcl/rcl.h>
-#include <rcl/error_handling.h>
-#include <rclc/rclc.h>
-#include <rclc/executor.h>
-
-#include <rmw_microxrcedds_c/config.h>
-#include <rmw_microros/rmw_microros.h>
-#include <micro_ros_utilities/string_utilities.h>
-
-//#include <std_msgs/msg/int32.h>
-//#include <std_msgs/msg/u_int16.h>
-#include <shoalbot_interfaces/msg/bms.h>
-#include <shoalbot_interfaces/msg/debug.h>
-#include <shoalbot_interfaces/msg/di_state.h>
-#include <shoalbot_interfaces/msg/do_navigation.h>
-#include <shoalbot_interfaces/msg/encoder_count.h>
-#include <shoalbot_interfaces/msg/imu_odom.h>
-#include <shoalbot_interfaces/msg/kinco_config.h>
-#include <shoalbot_interfaces/msg/position_cmd.h>
-#include <shoalbot_interfaces/msg/speed_cmd.h>
-//#include <shoalbot_interfaces/srv/pos_actual.h>
-
-#include "esp32_serial_transport.h"
 #include "kinco_twai.h"
 #include "icm42688_register.h"
 #include "amip4k_register.h"
-
-#define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
-#define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Continuing.\n",__LINE__,(int)temp_rc);}}
-#define ROS_NAMESPACE CONFIG_MICRO_ROS_NAMESPACE
 
 #define JETSON_22 GPIO_NUM_0 	// strapping pin
 #define PWM_1 GPIO_NUM_1
@@ -101,13 +74,10 @@
 
 static const char *MASTER_GPIO_TAG = "master_gpio";
 static const char *ESTOP_LEDC_TAG = "estop_ledc";
-//static const char *TEMPERATURE_SENSOR_TAG = "temperature_sensor";
-static const char *KINCO_TWAI_TAG = "kinco_twai";
+//static const char *KINCO_TWAI_TAG = "kinco_twai";
 static const char *MASTER_I2C_TAG = "master_i2c";
-//static const char *AMR_STATE_TAG = "amr_state";
-//static const char *MICRO_ROS_TAG = "micro_ros";
 static const char *ICM42688_AMIP4K_SPI_TAG = "icm42688_amip4k_spi";
-static const char *BMS_UART_TAG = "bms_uart";
+//static const char *BMS_UART_TAG = "bms_uart";
 static const char *NC_UART_TAG = "nc_uart";
 static const char *SHOALBOARD_TEST_TAG = "shoalboard_test";
 
@@ -115,36 +85,6 @@ static const char *SHOALBOARD_TEST_TAG = "shoalboard_test";
 /* -------------------- global -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
 */
 
-rcl_publisher_t bms_publisher, distate_publisher, imuodom_publisher;
-rcl_publisher_t encoder_publisher, debug_publisher;
-shoalbot_interfaces__msg__Bms bms_msg;
-shoalbot_interfaces__msg__Debug debug_msg;
-shoalbot_interfaces__msg__DiState distate_msg;
-shoalbot_interfaces__msg__ImuOdom imuodom_msg;
-shoalbot_interfaces__msg__EncoderCount encoder_msg;
-rcl_subscription_t donavigation_subscriber, kinco_subscriber, position_subscriber, speed_subscriber;
-//rcl_subscription_t debug_subscriber;
-shoalbot_interfaces__msg__DoNavigation donavigation_msg;
-shoalbot_interfaces__msg__KincoConfig kinco_msg;
-shoalbot_interfaces__msg__PositionCmd position_msg;
-shoalbot_interfaces__msg__SpeedCmd speed_msg;
-//std_msgs__msg__UInt16 debug_msg;
-//rcl_service_t position_service;
-//shoalbot_interfaces__srv__PosActual_Request position_req;
-//shoalbot_interfaces__srv__PosActual_Response position_res;
-rclc_executor_t executor;
-rclc_support_t support;
-rcl_allocator_t allocator;
-rcl_node_t node;
-rcl_timer_t bms_timer, distate_timer, imuodom_timer;
-rcl_timer_t encoder_timer, debug_timer;
-rcl_timer_t debugdistate_timer;
-rcl_init_options_t init_options;
-bool micro_ros_init_successful;
-const int timeout_ms = 100; // Timeout for each ping attempt
-const uint8_t attempts = 1; // Number of ping attempts
-const uint64_t spin_timeout = RCL_MS_TO_NS(1); // Spin period
-int64_t time_offset = 0;
 float orientation_q_[4];
 uint8_t slave_do; // MSB to LSB: DO_9, DO_8, DO_5 to DO_0
 uint8_t slave_pass1_pass2_bms; //MSB to LSB: x, x, x, x, x, PASS_2, PASS_1, BMS
@@ -221,21 +161,6 @@ int64_t get_millisecond(void) { // Get the number of seconds since boot
 	return (esp_timer_get_time() / 1000ULL);
 }
 
-static void sync_time(void) { // Calculate the time difference between the microROS agent and the MCU
-	int64_t now = get_millisecond();
-	RCSOFTCHECK(rmw_uros_sync_session(50));
-	int64_t ros_time_ms = rmw_uros_epoch_millis();
-	time_offset = ros_time_ms - now; 
-}
-
-struct timespec get_timespec(void) { // Get timestamp
-	struct timespec tp = {};
-	int64_t now = get_millisecond() + time_offset; // deviation of synchronous time
-	tp.tv_sec = now / 1000;
-	tp.tv_nsec = (now % 1000) * 1000000;
-	return tp;
-}
-
 typedef struct {
     float values[my_MAX];
     int k; // k stores the index of the current array read to create a circular memory through the array
@@ -282,7 +207,6 @@ const uint8_t nc_uart_read_tout = 3; // 3.5T * 8 = 28 ticks, TOUT=3 -> ~24..33 t
 bool isBootkeylongpressed;
 esp_reset_reason_t master_reason, slave_reason;
 // uint8_t crash_i; // malicious counter
-//static size_t uart_port = UART_NUM_0;
 
 
 /* -------------------- master gpio do -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
@@ -345,23 +269,6 @@ ledc_channel_config_t ledc_channel_config_2 = {
 	.hpoint = 0,
 };
 
-
-/* -------------------- temperature sensor -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
-*/
-
-temperature_sensor_handle_t temperature_sensor_handle = NULL;
-temperature_sensor_config_t temperature_sensor_config = {
-	.range_min = -10,
-	.range_max = 80,
-};
-
-void temperature_sensor_task(void *arg) { 
-	while (1) {
-		ESP_ERROR_CHECK(temperature_sensor_get_celsius(temperature_sensor_handle, &temp_esp));
-		vTaskDelay(pdMS_TO_TICKS(10));
-	}
-	vTaskDelete(NULL);
-}
 
 /* -------------------- kinco twai -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
 */
@@ -481,63 +388,6 @@ void i2c_task(void *arg) { // I2C master task
  		vTaskDelay(pdMS_TO_TICKS(50));
  		i2c_master_help_set(master_to_slave_buffer);
  		vTaskDelay(pdMS_TO_TICKS(50));
-	}
-	vTaskDelete(NULL);
-}
-
-
-/* -------------------- amr state -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
-*/
-
-void amr_state_machine(void* arg) { 
-	while(1) {
-		if (previous_amr_state!=amr_state) {
-			previous_amr_state = amr_state;
-			is_new_amr_state = true;
-		}
-		switch (amr_state) {
-			case 0: // SHTDWN
-				break;
-			case 1: // ESTOP
-				toDisableKinco = true;
-				break;
-			case 2: // ERROR
-				toDisableKinco = true;
-				break;
-			case 3: // LOWBAT
-				toDisableKinco = false;
-				break;
-			case 4: // CHRGNG
-				toDisableKinco = true;
-				break;
-			case 5: // IDLE
-				toDisableKinco = false;
-				break;
-			case 6: // SHWBAT
-				toDisableKinco = false;
-				break;
-			case 11: // BLOCK
-				toDisableKinco = false;
-				break;
-			case 12: // LEFT
-				toDisableKinco = false;
-				break;
-			case 13: // RIGHT
-				toDisableKinco = false;
-				break;
-			case 14: // MOVE
-				toDisableKinco = false;
-				break;
-			case 15: // FAIL
-				toDisableKinco = false;
-				break;
-			case 16: // AUTOCHRGNG
-				toDisableKinco = true;
-				break;
-			default:
-				break;
-		}
-		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 	vTaskDelete(NULL);
 }
@@ -1247,8 +1097,8 @@ void spi_task(void *arg) { // IMU and safety encoder data task
 		}
 		else {} 
 		right_count_prev = right_count_now;
-		encoder_msg.left = left_counter_now;
-		encoder_msg.right = right_counter_now;
+		// encoder_msg.left = left_counter_now;
+		// encoder_msg.right = right_counter_now;
 
 		odom_time_now= esp_timer_get_time();
 		float vel_dt = (odom_time_now - odom_time_prev) / 1000000.0;
@@ -1435,267 +1285,6 @@ void nc_uart_task(void *arg) {
 }
 
 
-/* -------------------- micro ros -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
-*/
-
-enum micro_ros_agent_state {
-	WAITING_AGENT,
-	AGENT_AVAILABLE,
-	AGENT_CONNECTED,
-	AGENT_DISCONNECTED
-} uros_state;
-
-void donavigation_callback(const void * msgin) {
-	all_do = donavigation_msg.set_do;
-	uint8_t navigation_intent_index = donavigation_msg.intent;
-	toStop = donavigation_msg.stop;
-	toImurest = donavigation_msg.imu_rest;
-	master_do = ((all_do & 0xFFC00) >> 8) | ((all_do & 0xC0) >> 6); // MSB to LSB: DO_19 to DO_10, DO_7, DO_6
-	slave_do = ((all_do & 0x300) >> 2) | ((all_do & 0x3F) >> 0); // MSB to LSB: DO_9, DO_8, DO_5 to DO_0
-	master_to_slave_buffer[1] = slave_do;
-//	master_to_slave_buffer[2] = navigation_intent_index;
-	master_to_slave_buffer[2] = slave_pass1_pass2_bms;
-	new_master_gpio_do = true;
-}
-
-void kinco_callback(const void * msgin) {
-	kinco_mode = kinco_msg.mode;
-	kinco_Kvp = kinco_msg.k_vp;
-	kinco_Kvi = kinco_msg.k_vi;
-	kinco_Kvi32 = kinco_msg.k_vi_32;
-	kinco_SpeedFbN = kinco_msg.speed_fb_n;
-	kinco_Kpp = kinco_msg.k_pp;
-	kinco_KVelocityFF = kinco_msg.k_velocity_ff;
-	new_kinco = true;
-}
-
-void position_callback(const void * msgin) {
-	left_kinco_pos = position_msg.left_position;
-	right_kinco_pos = position_msg.right_position;
-	left_profile_speed = position_msg.left_speed;
-	right_profile_speed = position_msg.right_speed;
-	left_profile_acc = position_msg.left_acc;
-	right_profile_acc = position_msg.right_acc;
-	left_profile_dec = position_msg.left_dec;
-	right_profile_dec = position_msg.right_dec;
-	new_position = true;
-}
-
-void speed_callback(const void * msgin) {
-	left_kinco_speed = speed_msg.left_speed;
-	right_kinco_speed = speed_msg.right_speed;
-	new_speed = true;
-}
-
-// bool new_debug;
-// uint16_t debug_num;
-// void debug_callback(const void * msgin) {
-// 	debug_num = debug_msg.data;
-// 	new_debug = true;
-// }
-
-// bool new_position_callback;
-// void positionservice_callback(const void * req, void * res) {
-// 	//res_in->posactual_inc = kinco_twai_getPosActual(req_in->node_id);
-// 	new_position_callback = true;
-// }
-
-void imuodom_ros_init(void) {
-	imuodom_msg.frame_id = micro_ros_string_utilities_set(imuodom_msg.frame_id, "imu_odom");
-	imuodom_msg.child_frame_id = micro_ros_string_utilities_set(imuodom_msg.child_frame_id, "base_link");
-	imuodom_msg.angular_velocity_x = 0.0;
-	imuodom_msg.angular_velocity_y = 0.0;
-	imuodom_msg.angular_velocity_z = 0.0;
-	imuodom_msg.linear_acceleration_x = 0.0;
-	imuodom_msg.linear_acceleration_y = 0.0;
-	imuodom_msg.linear_acceleration_z = 0.0;
-	imuodom_msg.pose_position_x = 0.0;
-	imuodom_msg.pose_position_y = 0.0;
-	imuodom_msg.pose_orientation_x = 0;
-	imuodom_msg.pose_orientation_y = 0;
-	imuodom_msg.pose_orientation_z = 0;
-	imuodom_msg.pose_orientation_w = 1;			
-	imuodom_msg.twist_linear_x = 0.0;
-	imuodom_msg.twist_angular_z = 0.0;
-}
-
-void bms_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-	RCLC_UNUSED(last_call_time);
-	if (timer != NULL) {
-		bms_msg.temperature = my_bms.temperature;
-		bms_msg.voltage = my_bms.voltage;
-		bms_msg.current = my_bms.current;
-		bms_msg.battery_level = my_bms.battery_level;
-		bms_msg.charge_cycle = my_bms.cycle;
-		RCSOFTCHECK(rcl_publish(&bms_publisher, &bms_msg, NULL));
-	}
-}
-
-// void debug_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-// 	RCLC_UNUSED(last_call_time);
-// 	if (timer != NULL) {
-// 		debug_msg.esp_master_reset_reason = (uint16_t)reason;
-// 		debug_msg.esp_master_temperature = temp_esp;
-// 		RCSOFTCHECK(rcl_publish(&debug_publisher, &debug_msg, NULL));
-// 	}
-// }
-
-// void distate_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-// 	RCLC_UNUSED(last_call_time);
-// 	if (timer != NULL) {
-// 		distate_msg.get_di = slave_di;
-// 		distate_msg.get_do = all_do;
-// 		distate_msg.state = amr_state;
-// 		distate_msg.left_kinco_error = left_kinco_error;
-// 		distate_msg.right_kinco_error = right_kinco_error;
-//         RCSOFTCHECK(rcl_publish(&distate_publisher, &distate_msg, NULL));
-// 	}
-// }
-
-void debugdistate_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-	RCLC_UNUSED(last_call_time);
-	if (timer != NULL) {
-		debug_msg.esp_master_reset_reason = (uint8_t) master_reason;
-		debug_msg.esp_slave_reset_reason = (uint8_t) slave_reason;
-		debug_msg.esp_master_temperature = temp_esp;
-		distate_msg.get_di = slave_di;
-		distate_msg.get_do = all_do;
-		distate_msg.state = amr_state;
-		distate_msg.left_kinco_error = left_kinco_error;
-		distate_msg.right_kinco_error = right_kinco_error;
-		RCSOFTCHECK(rcl_publish(&debug_publisher, &debug_msg, NULL));
-		RCSOFTCHECK(rcl_publish(&distate_publisher, &distate_msg, NULL));
-	}
-}
-
-void encoder_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-	RCLC_UNUSED(last_call_time);
-	if (timer != NULL) {
-		struct timespec time_stamp = get_timespec();
-		encoder_msg.stamp.sec = time_stamp.tv_sec;
-		encoder_msg.stamp.nanosec = time_stamp.tv_nsec;
-		RCSOFTCHECK(rcl_publish(&encoder_publisher, &encoder_msg, NULL));
-	}
-}
-
-void imuodom_timer_callback(rcl_timer_t * timer, int64_t last_call_time) {
-	RCLC_UNUSED(last_call_time);
-	if (timer != NULL) {
-		struct timespec time_stamp = get_timespec();
-		imuodom_msg.stamp.sec = time_stamp.tv_sec;
-		imuodom_msg.stamp.nanosec = time_stamp.tv_nsec;
-		imuodom_msg.angular_velocity_x = gyro_x; 
-		imuodom_msg.angular_velocity_y = gyro_y; 
-		imuodom_msg.angular_velocity_z = gyro_z; 
-		imuodom_msg.linear_acceleration_x = accel_x; 
-		imuodom_msg.linear_acceleration_y = accel_y; 
-		imuodom_msg.linear_acceleration_z = accel_z; 
-		imuodom_msg.pose_position_x = x_pos;
-		imuodom_msg.pose_position_y = y_pos;
-		imuodom_msg.pose_orientation_x = (double)orientation_q_[1];
-		imuodom_msg.pose_orientation_y = (double)orientation_q_[2];
-		imuodom_msg.pose_orientation_z = (double)orientation_q_[3];
-		imuodom_msg.pose_orientation_w = (double)orientation_q_[0];
-		imuodom_msg.twist_linear_x = linear_vel;
-		imuodom_msg.twist_angular_z = angular_vel;
-		RCSOFTCHECK(rcl_publish(&imuodom_publisher, &imuodom_msg, NULL));
-	}
-}
-
-bool create_entities(void) {
-	allocator = rcl_get_default_allocator();
-	RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
-	RCCHECK(rclc_node_init_default(&node, "shoalbot_master", "", &support));
-	RCCHECK(rclc_publisher_init_default(&bms_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, Bms), "bms"));
-	RCCHECK(rclc_publisher_init_default(&debug_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, Debug), "debug"));
-	RCCHECK(rclc_publisher_init_default(&distate_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, DiState), "di_state"));
-	RCCHECK(rclc_publisher_init_default(&encoder_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, EncoderCount), "encoder"));
-	RCCHECK(rclc_publisher_init_best_effort(&imuodom_publisher, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, ImuOdom), "imu_odom"));
-	RCCHECK(rclc_subscription_init_default(&donavigation_subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, DoNavigation), "do_navigation"));
-	RCCHECK(rclc_subscription_init_default(&kinco_subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, KincoConfig), "kinco"));
-	RCCHECK(rclc_subscription_init_default(&position_subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, PositionCmd), "position"));
-	RCCHECK(rclc_subscription_init_default(&speed_subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(shoalbot_interfaces, msg, SpeedCmd), "speed"));
-//	RCCHECK(rclc_subscription_init_default(&debug_subscriber, &node, ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt16), "debug"));
-//	RCCHECK(rclc_service_init_default(&position_service, &node, ROSIDL_GET_SRV_TYPE_SUPPORT(shoalbot_interfaces, srv, PosActual), "position_actual"));
-	RCCHECK(rclc_timer_init_default(&bms_timer, &support, RCL_S_TO_NS(5), bms_timer_callback));
-//	RCCHECK(rclc_timer_init_default(&debug_timer, &support, RCL_MS_TO_NS(200), debug_timer_callback));
-//	RCCHECK(rclc_timer_init_default(&distate_timer, &support, RCL_MS_TO_NS(200), distate_timer_callback));
-	RCCHECK(rclc_timer_init_default(&debugdistate_timer, &support, RCL_MS_TO_NS(200), debugdistate_timer_callback));
-	RCCHECK(rclc_timer_init_default(&encoder_timer, &support, RCL_MS_TO_NS(50), encoder_timer_callback));
-	RCCHECK(rclc_timer_init_default(&imuodom_timer, &support, RCL_MS_TO_NS(10), imuodom_timer_callback));
-	executor = rclc_executor_get_zero_initialized_executor();
-	RCCHECK(rclc_executor_init(&executor, &support.context, 10, &allocator));
-	RCCHECK(rclc_executor_add_timer(&executor, &bms_timer));
-//	RCCHECK(rclc_executor_add_timer(&executor, &debug_timer));
-//	RCCHECK(rclc_executor_add_timer(&executor, &distate_timer));
-	RCCHECK(rclc_executor_add_timer(&executor, &debugdistate_timer));
-	RCCHECK(rclc_executor_add_timer(&executor, &encoder_timer));
-	RCCHECK(rclc_executor_add_timer(&executor, &imuodom_timer));
-	RCCHECK(rclc_executor_add_subscription(&executor, &donavigation_subscriber, &donavigation_msg, &donavigation_callback, ON_NEW_DATA));
-	RCCHECK(rclc_executor_add_subscription(&executor, &kinco_subscriber, &kinco_msg, &kinco_callback, ON_NEW_DATA));
-	RCCHECK(rclc_executor_add_subscription(&executor, &position_subscriber, &position_msg, &position_callback, ON_NEW_DATA));
-	RCCHECK(rclc_executor_add_subscription(&executor, &speed_subscriber, &speed_msg, &speed_callback, ON_NEW_DATA));
-//	RCCHECK(rclc_executor_add_subscription(&executor, &debug_subscriber, &debug_msg, &debug_callback, ON_NEW_DATA));
-//	RCCHECK(rclc_executor_add_service(&executor, &position_service, &position_req, &position_res, positionservice_callback));
-	sync_time();
-	return true;
-}
-
-void destroy_entities(void) {
-    rmw_context_t * rmw_context = rcl_context_get_rmw_context(&support.context);
-    (void) rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
-	RCCHECK(rcl_publisher_fini(&bms_publisher, &node));
-	RCCHECK(rcl_publisher_fini(&debug_publisher, &node));
-	RCCHECK(rcl_publisher_fini(&distate_publisher, &node));
-	RCCHECK(rcl_publisher_fini(&encoder_publisher, &node));
-	RCCHECK(rcl_publisher_fini(&imuodom_publisher, &node));
-	RCCHECK(rcl_timer_fini(&bms_timer));
-//	RCCHECK(rcl_timer_fini(&debug_timer));
-//	RCCHECK(rcl_timer_fini(&distate_timer));
-	RCCHECK(rcl_timer_fini(&debugdistate_timer));
-	RCCHECK(rcl_timer_fini(&encoder_timer));
-	RCCHECK(rcl_timer_fini(&imuodom_timer));
-	RCCHECK(rcl_subscription_fini(&donavigation_subscriber, &node));
-	RCCHECK(rcl_subscription_fini(&kinco_subscriber, &node));
-	RCCHECK(rcl_subscription_fini(&position_subscriber, &node));
-	RCCHECK(rcl_subscription_fini(&speed_subscriber, &node));
-//	RCCHECK(rcl_subscription_fini(&debug_subscriber, &node));
-//	RCCHECK(rcl_service_fini(&position_service, &node));
-	RCCHECK(rcl_node_fini(&node));
-	RCCHECK(rclc_support_fini(&support));
-}
-
-void micro_ros_task(void * arg) {
-    while(1) {
-        switch (uros_state) {
-            case WAITING_AGENT: // Check for agent connection
-                uros_state = (RMW_RET_OK == rmw_uros_ping_agent(timeout_ms, attempts)) ? AGENT_AVAILABLE : WAITING_AGENT;
-                break;
-            case AGENT_AVAILABLE: // Create micro-ROS entities
-                uros_state = (true == create_entities()) ? AGENT_CONNECTED : WAITING_AGENT;
-                if (uros_state == WAITING_AGENT) { // Creation failed, release allocated resources
-                    destroy_entities();
-                };
-                break;
-            case AGENT_CONNECTED: // Check connection and spin on success
-                uros_state = (RMW_RET_OK == rmw_uros_ping_agent(timeout_ms, attempts)) ? AGENT_CONNECTED : AGENT_DISCONNECTED;
-                if (uros_state == AGENT_CONNECTED) {
-                    RCSOFTCHECK(rclc_executor_spin_some(&executor, spin_timeout));
-                }
-                break;
-            case AGENT_DISCONNECTED: // Connection is lost, destroy entities and go back to first step
-                destroy_entities();
-                uros_state = WAITING_AGENT;
-                break;
-            default:
-                break;
-        }
-		vTaskDelay(pdMS_TO_TICKS(5));
-    }
-	vTaskDelete(NULL);
-}
-
-
 /* -------------------- shoalboard test -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
 */
 
@@ -1741,9 +1330,6 @@ void shoalboard_test_task(void * arg) {
 */
 
 void app_main(void) {
-	master_reason = esp_reset_reason();
-	imuodom_ros_init();
-	uros_state = WAITING_AGENT;
 	
 	ESP_LOGI(MASTER_GPIO_TAG, "Configure gpio direction");
 	ESP_ERROR_CHECK(gpio_set_direction(DO_6, GPIO_MODE_OUTPUT));
@@ -1767,15 +1353,8 @@ void app_main(void) {
 	ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_config_1));
 	ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_config_2));
 
-//	ESP_LOGI(TEMPERATURE_SENSOR_TAG, "Install temperature sensor driver");
-//	ESP_ERROR_CHECK(temperature_sensor_install(&temperature_sensor_config, &temperature_sensor_handle));
-//	ESP_LOGI(TEMPERATURE_SENSOR_TAG, "Enable temperature sensor");
-//	ESP_ERROR_CHECK(temperature_sensor_enable(temperature_sensor_handle));
-
 //	ESP_LOGI(KINCO_TWAI_TAG, "Install and start twai driver");
 //	kinco_twai_init(CAN1_TX, CAN1_RX);
-
-//	vTaskDelay(pdMS_TO_TICKS(1000)); // Essential wait for power supply to start
 
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Initialize spi bus");
 	ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &spi_bus_config, SPI_DMA_CH_AUTO));
@@ -1851,67 +1430,6 @@ void app_main(void) {
 //	i2c_master_help_set(master_to_slave_buffer); // Essential to turn on DO_0, DO_1, DO_3
 //	vTaskDelay(pdMS_TO_TICKS(1000)); // Essential wait for kinco to power up
 
-//	ESP_LOGI(KINCO_TWAI_TAG, "Initialize and configure kinco motor driver");
-//	kinco_twai_setDin1Function(0x1, 0xA002); // set Din1 to halt
-//	kinco_twai_setDin1Function(0x2, 0xA002); 
-//	kinco_twai_setDinPolarity(0x1, 0xFFFE); // set Din1 to normally closed
-//	kinco_twai_setDinPolarity(0x2, 0xFFFE); 
-//	kinco_twai_setHaltMode(0x1, 2); // stop by quick stop dec
-//	kinco_twai_setHaltMode(0x2, 2);
-//	kinco_twai_setRx1Id(0x1, 0x20A); // Combined COB-ID: 0x20A
-//	kinco_twai_setRx1Id(0x2, 0x20A); 
-//	kinco_twai_setRx1Pdo1(0x1, 0x60400010); // Controlword 2-byte
-//	kinco_twai_setRx1Pdo1(0x2, 0x60400010); 
-//	kinco_twai_setGroupRx1Pdo(0x1, 1); // number of data: 1
-//	kinco_twai_setGroupRx1Pdo(0x2, 1); 
-//	kinco_twai_setRx2Id(0x1, 0x30A); // Combined COB-ID: 0x30A
-//	kinco_twai_setRx2Id(0x2, 0x30A); 
-//	kinco_twai_setRx2Pdo1(0x1, 0x60FF0020); // TargetSpeed 4-byte
-//	kinco_twai_setRx2Pdo1(0x2, 0x60C10220); // dummy 4-byte
-//	kinco_twai_setRx2Pdo2(0x1, 0x60C10220); // dummy 4-byte
-//	kinco_twai_setRx2Pdo2(0x2, 0x60FF0020); // TargetSpeed 4-byte
-//	kinco_twai_setGroupRx2Pdo(0x1, 2); // number of data: 2
-//	kinco_twai_setGroupRx2Pdo(0x2, 2); 
-//	kinco_twai_setRx3Id(0x1, 0x401); // COB-ID: 0x401
-//	kinco_twai_setRx3Id(0x2, 0x402); // COB-ID: 0x402
-//	kinco_twai_setRx3Pdo1(0x1, 0x607A0020); // TargetPosition 4-byte
-//	kinco_twai_setRx3Pdo1(0x2, 0x607A0020); 
-//	kinco_twai_setRx3Pdo2(0x1, 0x60810020); // ProfileSpeed 4-byte
-//	kinco_twai_setRx3Pdo2(0x2, 0x60810020); 
-//	kinco_twai_setGroupRx3Pdo(0x1, 2); // number of data: 2
-//	kinco_twai_setGroupRx3Pdo(0x2, 2); 
-//	kinco_twai_setRx4Id(0x1, 0x501); // COB-ID: 0x501
-//	kinco_twai_setRx4Id(0x2, 0x502); // COB-ID: 0x502
-//	kinco_twai_setRx4Pdo1(0x1, 0x60830020); // ProfileAcc 4-byte
-//	kinco_twai_setRx4Pdo1(0x2, 0x60830020); 
-//	kinco_twai_setRx4Pdo2(0x1, 0x60840020); // ProfileDec 4-byte
-//	kinco_twai_setRx4Pdo2(0x2, 0x60840020); 
-//	kinco_twai_setGroupRx4Pdo(0x1, 2); // number of data: 2
-//	kinco_twai_setGroupRx4Pdo(0x2, 2); 
-//	kinco_twai_setMaxSpeedRPM (0x1, 3000); //SMC60S-0040-30MBK-5DSU 3000 rpm
-//	kinco_twai_setMaxSpeedRPM (0x2, 3000); 
-//	kinco_twai_setMaxFollowingError(0x1, 10000); //655360 inc
-//	kinco_twai_setMaxFollowingError(0x2, 10000); 
-//	kinco_twai_setKvp(0x1, kinco_Kvp); //200 DEC
-//	kinco_twai_setKvp(0x2, kinco_Kvp); 
-//	kinco_twai_setKvi(0x1, kinco_Kvi); //1 DEC
-//	kinco_twai_setKvi(0x2, kinco_Kvi); 
-//	kinco_twai_setKvi32(0x1, kinco_Kvi32); //0 DEC
-//	kinco_twai_setKvi32(0x2, kinco_Kvi32); 
-//	kinco_twai_setSpeedFbN(0x1, kinco_SpeedFbN); //7 DEC
-//	kinco_twai_setSpeedFbN(0x2, kinco_SpeedFbN); 
-//	kinco_twai_setKpp(0x1, kinco_Kpp); //10 Hz
-//	kinco_twai_setKpp(0x2, kinco_Kpp); 
-//	kinco_twai_setKVelocityFF(0x1, kinco_KVelocityFF); //100%
-//	kinco_twai_setKVelocityFF(0x2, kinco_KVelocityFF); 
-//	kinco_twai_setOperationMode(0x1, 3); //set velocity control mode
-//	kinco_twai_setOperationMode(0x2, 3);
-//	kinco_twai_Rx2Pdo(0x30A, 0, 0); // target speed 0 
-//	kinco_twai_Rx3Pdo(0x401, 0, left_profile_speed); // target position 0
-//	kinco_twai_Rx3Pdo(0x402, 0, right_profile_speed);
-//	kinco_twai_Rx4Pdo(0x501, left_profile_acc, left_profile_dec); 
-//	kinco_twai_Rx4Pdo(0x502, right_profile_acc, right_profile_dec);
-
 //	ESP_LOGI(BMS_UART_TAG,"Install bms uart driver");
 //	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, bms_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
 //	ESP_LOGI(BMS_UART_TAG,"Configure bms uart parameter");
@@ -1959,17 +1477,9 @@ void app_main(void) {
 //	ESP_LOGI(NC_UART_TAG, "Create nc uart task");
 //	xTaskCreate(nc_uart_task, "nc_uart_task", 4096, NULL, 1, NULL);
 
-//	#if defined(RMW_UXRCE_TRANSPORT_CUSTOM) 
-//		rmw_uros_set_custom_transport(true, (void *) &uart_port, esp32_serial_open, esp32_serial_close, esp32_serial_write, esp32_serial_read);
-//	#else
-//	#error micro-ROS transports misconfigured
-//	#endif  // RMW_UXRCE_TRANSPORT_CUSTOM
-
 	esp_intr_dump(NULL);
 
-//	ESP_LOGI(MICRO_ROS_TAG, "Create micro ros task");
 	vTaskDelay(pdMS_TO_TICKS(1000));
-//	xTaskCreatePinnedToCore(micro_ros_task, "micro_ros_task", CONFIG_MICRO_ROS_APP_STACK, NULL, CONFIG_MICRO_ROS_APP_TASK_PRIO, NULL, 1);
 
 	ESP_LOGI(SHOALBOARD_TEST_TAG, "Create shoalboard test task");
 	xTaskCreate(shoalboard_test_task, "shoalboard_test_task", 16000, NULL, 1, NULL);
