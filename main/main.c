@@ -20,12 +20,12 @@
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "driver/temperature_sensor.h"
+#include "driver/twai.h"
 
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
 #include "esp_vfs_fat.h"
 
-#include "kinco_twai.h"
 #include "icm42688_register.h"
 #include "amip4k_register.h"
 
@@ -74,10 +74,10 @@
 
 static const char *MASTER_GPIO_TAG = "master_gpio";
 static const char *ESTOP_LEDC_TAG = "estop_ledc";
-//static const char *KINCO_TWAI_TAG = "kinco_twai";
+static const char *KINCO_TWAI_TAG = "kinco_twai";
 static const char *MASTER_I2C_TAG = "master_i2c";
 static const char *ICM42688_AMIP4K_SPI_TAG = "icm42688_amip4k_spi";
-//static const char *BMS_UART_TAG = "bms_uart";
+static const char *BMS_UART_TAG = "bms_uart";
 static const char *NC_UART_TAG = "nc_uart";
 static const char *SHOALBOARD_TEST_TAG = "shoalboard_test";
 
@@ -94,7 +94,7 @@ uint32_t slave_di; //Bit 23 to LSB: DI_23 to DI_0
 uint8_t master_to_slave_read_cmd[1] = {0xFF}; // command
 uint8_t master_to_slave_buffer[4] = {
 	0b10111011, // command
-	0b00001011, // at slave: DO_9, DO_8, DO_5, DO_4, DO_3, DO_2, DO_1, DO_0
+	0b00000000, // at slave: DO_9, DO_8, DO_5, DO_4, DO_3, DO_2, DO_1, DO_0
 	0b00000000, // at slave: x, x, x, x, x, PASS_2, PASS_1, BMS
 	0b00000000, // battery percentage 
 };
@@ -214,8 +214,8 @@ esp_reset_reason_t master_reason, slave_reason;
 
 void master_gpio_do_task(void* arg) {
 	while(1) {
-		if(new_master_gpio_do) {
-			new_master_gpio_do = false;
+//		if(new_master_gpio_do) {
+//			new_master_gpio_do = false;
             gpio_set_level(DO_6, master_do & 0x0001);
             gpio_set_level(DO_7, master_do & 0x0002);
             gpio_set_level(DO_10, master_do & 0x0004);
@@ -228,7 +228,7 @@ void master_gpio_do_task(void* arg) {
             gpio_set_level(DO_17, master_do & 0x0200);
             gpio_set_level(DO_18, master_do & 0x0400);
             gpio_set_level(DO_19, master_do & 0x0800);
-		}
+//		}
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 	vTaskDelete(NULL);
@@ -273,73 +273,27 @@ ledc_channel_config_t ledc_channel_config_2 = {
 /* -------------------- kinco twai -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
 */
 
-void twai_task(void *arg) { // Kinco motor task
-	while (1) {
-		if (is_new_amr_state) {
-			if (toDisableKinco) {
-				kinco_twai_Rx1Pdo(0x20A, 0x0006); // QuS, EnV
-				kinco_twai_Rx2Pdo(0x30A, 0, 0); // target speed 0 
-				kinco_twai_Rx3Pdo(0x401, 0, left_profile_speed); // target position 0
-				kinco_twai_Rx3Pdo(0x402, 0, right_profile_speed);
+twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN1_TX, CAN1_RX, TWAI_MODE_NORMAL);
+twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+twai_message_t transmit_message = {
+	.data_length_code = 8,
+	.data = {0, 0, 0, 0, 0, 0, 0, 0},
+};
+
+void kinco_twai_task(void* arg) { // echo back received twai message, with identifier +1 and each data bytes +1
+	while(1) {
+		twai_message_t receive_message;
+		if (twai_receive(&receive_message, pdMS_TO_TICKS(100)) == ESP_OK) {
+			transmit_message.identifier = receive_message.identifier + 1;
+			for (int twai_i = 0; twai_i < receive_message.data_length_code; twai_i++) {
+				transmit_message.data[twai_i] = receive_message.data[twai_i] + 1;
 			}
-			else {
-				kinco_twai_Rx1Pdo(0x20A, 0x006F); // Rel, Imd, EnO, QuS, EnV, SwO
-			}
-			is_new_amr_state = false;
+			ESP_ERROR_CHECK(twai_transmit(&transmit_message, pdMS_TO_TICKS(100)));
 		}
-		if (isResetpressed) { // check reset for releasing from ESTOP and ERROR state
-				kinco_twai_Rx2Pdo(0x30A, 0, 0); // target speed 0 
-				kinco_twai_Rx3Pdo(0x401, 0, left_profile_speed); // target position 0
-				kinco_twai_Rx3Pdo(0x402, 0, right_profile_speed);
-		}
-		if (new_kinco) {
-			kinco_twai_setOperationMode(0x1, kinco_mode);
-			kinco_twai_setOperationMode(0x2, kinco_mode);
-			// Velocity and Position loop parameters
-			kinco_twai_setKvp(0x1, kinco_Kvp); 
-			kinco_twai_setKvp(0x2, kinco_Kvp); 
-			kinco_twai_setKvi(0x1, kinco_Kvi); 
-			kinco_twai_setKvi(0x2, kinco_Kvi); 
-			kinco_twai_setKvi32(0x1, kinco_Kvi32); 
-			kinco_twai_setKvi32(0x2, kinco_Kvi32); 
-			kinco_twai_setSpeedFbN(0x1, kinco_SpeedFbN); 
-			kinco_twai_setSpeedFbN(0x2, kinco_SpeedFbN); 
-			kinco_twai_setKpp(0x1, kinco_Kpp); 
-			kinco_twai_setKpp(0x2, kinco_Kpp); 
-			kinco_twai_setKVelocityFF(0x1, kinco_KVelocityFF); 
-			kinco_twai_setKVelocityFF(0x2, kinco_KVelocityFF); 
-			new_kinco = false;
-		}
-/*		if (new_position_callback) {
-			position_res.posactual_inc = kinco_twai_getPosActual(position_req.node_id);
-			//res_in->posactual_inc = kinco_twai_getPosActual(req_in->node_id);
-			new_position_callback = false;
-		}*/
-		switch (kinco_mode) {
-			case 1: // position control mode
-				if (new_position) {
-					kinco_twai_Rx1Pdo(0x20A, 0x006F); // Rel, Imd, EnO, QuS, EnV, SwO
-					kinco_twai_Rx3Pdo(0x401, left_kinco_pos, left_profile_speed); 
-					kinco_twai_Rx3Pdo(0x402, right_kinco_pos, right_profile_speed);
-					kinco_twai_Rx4Pdo(0x501, left_profile_acc, left_profile_dec); 
-					kinco_twai_Rx4Pdo(0x502, right_profile_acc, right_profile_dec);
-					kinco_twai_Rx1Pdo(0x20A, 0x007F); // Rel, Imd, SeP, EnO, QuS, EnV, SwO
-					new_position = false;
-				}
-				break;
-			case 3:  // velocity control mode
-				if (new_speed) {
-					kinco_twai_Rx1Pdo(0x20A, 0x006F); // Rel, Imd, EnO, QuS, EnV, SwO
-					kinco_twai_Rx2Pdo(0x30A, left_kinco_speed, right_kinco_speed); 
-					new_speed = false;
-				}
-				break;
-			default:
-				break;
-		}
-		left_kinco_error = kinco_twai_getErrorState(1);
-		right_kinco_error = kinco_twai_getErrorState(2);
-		vTaskDelay(pdMS_TO_TICKS(10));
+		else {}
+		vTaskDelay(pdMS_TO_TICKS(50));
 	}
 	vTaskDelete(NULL);
 }
@@ -383,8 +337,8 @@ void i2c_master_help_get(uint8_t *cmd) {
 void i2c_task(void *arg) { // I2C master task
 	while (1) {
 		i2c_master_help_get(master_to_slave_read_cmd);
-		if ((slave_di & 0x00200000) >> 21) isResetpressed = true;
- 		else isResetpressed = false;
+//		if ((slave_di & 0x00200000) >> 21) isResetpressed = true;
+// 		else isResetpressed = false;
  		vTaskDelay(pdMS_TO_TICKS(50));
  		i2c_master_help_set(master_to_slave_buffer);
  		vTaskDelay(pdMS_TO_TICKS(50));
@@ -1154,75 +1108,32 @@ uart_config_t bms_uart_config = {
 
 static void bms_uart_help_echo_send(const uart_port_t port, const char* str, uint8_t length) {
     if (uart_write_bytes(port, str, length) != length) {
-        // ESP_LOGE(BMS_UART_TAG, "Send data critical failure.");
-        // abort();
     }
 }
 
-uint8_t atd(uint8_t val) { // bms_uart_help_ascii_to_dec
-	if (val >= '0' && val <= '9') val = val -48;
-	else if(val >= 'A' && val <= 'F') val = val -65 + 10;
-	else {}
-	return val;
-}
-
-/*Byte 0:6 SOI (0x7E); 7:8 SOI ; 73:76 temperature 1 ; 77:80 temperature 2 ; 81:84 temperature 3
-85: 88 current ; 89:92 voltage ; 93:96 remaining charge ; 97:98 ?? ; 99: 102 capacity ; 103:106 cycle
-127: EOI (0x0D)
-*/
 void bms_uart_task(void *arg) { 
 	while (1) {
 		ESP_ERROR_CHECK(uart_flush(UART_NUM_1));
 		uint8_t* data = (uint8_t*) malloc(bms_uart_buffer_size); // Allocate buffers for UART
-		uint8_t j = 0; // index of data
-		bms_uart_help_echo_send(UART_NUM_1, "\r\n", 2);
-		vTaskDelay(pdMS_TO_TICKS(10));
-		int len = uart_read_bytes(UART_NUM_1, data, bms_uart_buffer_size, (200/portTICK_PERIOD_MS)); // Read data from UART
-		vTaskDelay(pdMS_TO_TICKS(10));
-		if (len > 0) { // Process data
-			// ESP_LOGI(BMS_UART_TAG, "Received %u bytes:", len);
-            // printf("[ ");
-            // for (int i = 0; i < len; i++) {
-            //     printf("0x%.2X ", (uint8_t)data[i]);
-            // }
-            //printf("] \n");
-			for (int k = 0; k < len; k++) { // searching for packet header 0x7E
-				if ((uint8_t)data[k]==0x7E){
-					j = k;
-					//printf("index: %d  \n", j);
+		int len = uart_read_bytes(UART_NUM_1, data, bms_uart_buffer_size, (100/portTICK_PERIOD_MS)); // Read data from UART
+		if (len > 0) { // Write data back to UART
+			bms_uart_help_echo_send(UART_NUM_1, "\r\n", 2);
+			char prefix[] = "Shoalbot's RS485_1 received: [";
+			bms_uart_help_echo_send(UART_NUM_1, prefix, (sizeof(prefix) - 1));
+			for (int i = 0; i < len; i++) {
+				bms_uart_help_echo_send(UART_NUM_1, (const char*) &data[i], 1); 
+				if (data[i] == '\r') { // Add a Newline character if get a return charater from paste
+					bms_uart_help_echo_send(UART_NUM_1, "\n", 1);
 				}
 			}
-			// Temperature should minus 40 to convert to degree celcius
-			bms_temperature_1 = (atd(data[j+73])<<12) + (atd(data[j+74])<<8) + (atd(data[j+75])<<4) + (atd(data[j+76])<<0);
-			// printf("Temperature 1: %d  ", bms_temperature_1);
-			bms_temperature_2 = (atd(data[j+77])<<12) + (atd(data[j+78])<<8) + (atd(data[j+79])<<4) + (atd(data[j+80])<<0);
-			// printf("Temperature 2: %d  ", bms_temperature_2);
-			bms_temperature_3 = (atd(data[j+81])<<12) + (atd(data[j+82])<<8) + (atd(data[j+83])<<4) + (atd(data[j+84])<<0);
-			// printf("Temperature 3: %d  ", bms_temperature_3);
-			my_bms.temperature = ((bms_temperature_1 + bms_temperature_2 + bms_temperature_3) / 3.0) - 40;
-			// Current unit is 10mA
-			bms_current = (int16_t) ( (atd(data[j+85])<<12) + (atd(data[j+86])<<8) + (atd(data[j+87])<<4) + (atd(data[j+88])<<0) );
-			// printf("Current: %d  ", bms_current);
-			my_bms.current = bms_current * 0.01;
-			// Voltage unit is 1mV
-			bms_voltage = (atd(data[j+89])<<12) + (atd(data[j+90])<<8) + (atd(data[j+91])<<4) + (atd(data[j+92])<<0);
-			// printf("Voltage: %u  ", bms_voltage);
-			my_bms.voltage = bms_voltage * 0.001;
-			// Percentage, remaining and overall uint is 10mAh
-			bms_mh = (atd(data[j+93])<<12) + (atd(data[j+94])<<8) + (atd(data[j+95])<<4) + (atd(data[j+96])<<0);
-			// printf("Mh: %u  ", bms_mh);
-			bms_capacity = (atd(data[j+99])<<12) + (atd(data[j+100])<<8) + (atd(data[j+101])<<4) + (atd(data[j+102])<<0);
-			// printf("Capacity: %u  ", bms_capacity);
-			my_bms.battery_level = (float) bms_mh / bms_capacity * 100.0;
-			// Cycle
-			bms_cycle = (atd(data[j+103])<<12) + (atd(data[j+104])<<8) + (atd(data[j+105])<<4) + (atd(data[j+106])<<0);
-			// printf("Cycle: %u \n", bms_cycle);
-			my_bms.cycle = bms_cycle;
+			bms_uart_help_echo_send(UART_NUM_1, "]\r\n", 3);
 		}
-		else {}
-		master_to_slave_buffer[3] = (uint8_t) (my_bms.battery_level);
+		else { // Echo a "." to show alive while waiting for input
+			bms_uart_help_echo_send(UART_NUM_1, ".", 1); 
+			ESP_ERROR_CHECK(uart_wait_tx_done(UART_NUM_1, (10/portTICK_PERIOD_MS)));
+		}
 		free(data);
-		vTaskDelay(pdMS_TO_TICKS(2000));
+		vTaskDelay(pdMS_TO_TICKS(50));
 	}
 	vTaskDelete(NULL);
 }
@@ -1243,8 +1154,6 @@ uart_config_t nc_uart_config = {
 
 static void nc_uart_help_echo_send(const uart_port_t port, const char* str, uint8_t length) {
     if (uart_write_bytes(port, str, length) != length) {
-        // ESP_LOGE(NC_UART_TAG, "Send data critical failure.");
-        // abort();
     }
 }
 
@@ -1255,18 +1164,14 @@ void nc_uart_task(void *arg) {
 		int len = uart_read_bytes(UART_NUM_2, data, nc_uart_buffer_size, (100/portTICK_PERIOD_MS)); // Read data from UART
 		if (len > 0) { // Write data back to UART
 			nc_uart_help_echo_send(UART_NUM_2, "\r\n", 2);
-			char prefix[] = "RS485 Received: [";
+			char prefix[] = "Shoalbot's RS485_2 received: [";
 			nc_uart_help_echo_send(UART_NUM_2, prefix, (sizeof(prefix) - 1));
-			ESP_LOGI(NC_UART_TAG, "Received %u bytes:", len);
-			printf("[ ");
 			for (int i = 0; i < len; i++) {
-				printf("0x%.2X ", (uint8_t)data[i]);
 				nc_uart_help_echo_send(UART_NUM_2, (const char*) &data[i], 1); 
 				if (data[i] == '\r') { // Add a Newline character if get a return charater from paste
 					nc_uart_help_echo_send(UART_NUM_2, "\n", 1);
 				}
 			}
-			// printf("] \n");
 			nc_uart_help_echo_send(UART_NUM_2, "]\r\n", 3);
 		}
 		else { // Echo a "." to show alive while waiting for input
@@ -1274,12 +1179,7 @@ void nc_uart_task(void *arg) {
 			ESP_ERROR_CHECK(uart_wait_tx_done(UART_NUM_2, (10/portTICK_PERIOD_MS)));
 		}
 		free(data);
-		// if (crash_i == 9) {  // check for crash
-		// 	printf("Now esp is crashed\n");
-		// 	assert(0);
-		// }
-		// else crash_i ++;
-		vTaskDelay(pdMS_TO_TICKS(2000));
+		vTaskDelay(pdMS_TO_TICKS(50));
 	}
 	vTaskDelete(NULL);
 }
@@ -1331,6 +1231,11 @@ void shoalboard_test_task(void * arg) {
 
 void app_main(void) {
 	
+	ESP_ERROR_CHECK(gpio_reset_pin(DO_13)); //neccessary reset MTCK
+	ESP_ERROR_CHECK(gpio_reset_pin(DO_14)); //MTDO
+	ESP_ERROR_CHECK(gpio_reset_pin(DO_15)); //MTDI
+	ESP_ERROR_CHECK(gpio_reset_pin(DO_16)); //MTMS
+
 	ESP_LOGI(MASTER_GPIO_TAG, "Configure gpio direction");
 	ESP_ERROR_CHECK(gpio_set_direction(DO_6, GPIO_MODE_OUTPUT));
 	ESP_ERROR_CHECK(gpio_set_direction(DO_7, GPIO_MODE_OUTPUT));
@@ -1344,7 +1249,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(gpio_set_direction(DO_17, GPIO_MODE_OUTPUT));
     ESP_ERROR_CHECK(gpio_set_direction(DO_18, GPIO_MODE_OUTPUT));
     ESP_ERROR_CHECK(gpio_set_direction(DO_19, GPIO_MODE_OUTPUT));
-	
+
 	ESP_LOGI(ESTOP_LEDC_TAG, "Configure ledc timer");
 	ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer_config_1));
 	vTaskDelay(pdMS_TO_TICKS(48)); // Essential for pulse A/B 50ms phase shift
@@ -1353,8 +1258,10 @@ void app_main(void) {
 	ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_config_1));
 	ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_config_2));
 
-//	ESP_LOGI(KINCO_TWAI_TAG, "Install and start twai driver");
-//	kinco_twai_init(CAN1_TX, CAN1_RX);
+	ESP_LOGI(KINCO_TWAI_TAG, "Install twai driver");
+	ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+	ESP_LOGI(KINCO_TWAI_TAG, "Start twai driver");
+	ESP_ERROR_CHECK(twai_start());
 
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Initialize spi bus");
 	ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &spi_bus_config, SPI_DMA_CH_AUTO));
@@ -1391,12 +1298,12 @@ void app_main(void) {
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Get sincos encoder statidrev, cfg1, cfg2, cfg3");
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert left stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert right stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_r));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_l));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_r));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_l));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_r));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_l));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_r));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_l));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_r));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_l));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_r));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_l));
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_r));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Reset and reconfigure IC left and right");
 	amip4k_spi_set_cmd(spi_device_handle_l, 0x08); // RESIC 0b00001000
 	amip4k_spi_set_cmd(spi_device_handle_r, 0x08); // RESIC 0b00001000
@@ -1430,35 +1337,31 @@ void app_main(void) {
 //	i2c_master_help_set(master_to_slave_buffer); // Essential to turn on DO_0, DO_1, DO_3
 //	vTaskDelay(pdMS_TO_TICKS(1000)); // Essential wait for kinco to power up
 
-//	ESP_LOGI(BMS_UART_TAG,"Install bms uart driver");
-//	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, bms_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
-//	ESP_LOGI(BMS_UART_TAG,"Configure bms uart parameter");
-//	ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &bms_uart_config));
-//	ESP_LOGI(BMS_UART_TAG,"Assign signals of bms uart peripheral to gpio pins");
-//	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1, RS1_TX, RS1_RX, RS1_DE, UART_PIN_NO_CHANGE));
-//	ESP_LOGI(BMS_UART_TAG,"Set bms uart to rs485 half duplex mode");
-//	ESP_ERROR_CHECK(uart_set_mode(UART_NUM_1, UART_MODE_RS485_HALF_DUPLEX));
-//	ESP_LOGI(BMS_UART_TAG,"Set bms uart read threshold timeout for TOUT feature");
-//	ESP_ERROR_CHECK(uart_set_rx_timeout(UART_NUM_1, bms_uart_read_tout));
-	// ESP_LOGI(BMS_UART_TAG, "Test bms uart receive loop");
-	// bms_uart_help_echo_send(UART_NUM_1, "\r\n", 2);
-//	ESP_LOGI(BMS_UART_TAG, "Discard all data in the bms uart rx buffer");
-//	ESP_ERROR_CHECK(uart_flush(UART_NUM_1));
+	ESP_LOGI(BMS_UART_TAG,"Install bms uart driver");
+	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, bms_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
+	ESP_LOGI(BMS_UART_TAG,"Configure bms uart parameter");
+	ESP_ERROR_CHECK(uart_param_config(UART_NUM_1, &bms_uart_config));
+	ESP_LOGI(BMS_UART_TAG,"Assign signals of bms uart peripheral to gpio pins");
+	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_1, RS1_TX, RS1_RX, RS1_DE, UART_PIN_NO_CHANGE));
+	ESP_LOGI(BMS_UART_TAG,"Set bms uart to rs485 half duplex mode");
+	ESP_ERROR_CHECK(uart_set_mode(UART_NUM_1, UART_MODE_RS485_HALF_DUPLEX));
+	ESP_LOGI(BMS_UART_TAG,"Set bms uart read threshold timeout for TOUT feature");
+	ESP_ERROR_CHECK(uart_set_rx_timeout(UART_NUM_1, bms_uart_read_tout));
+	ESP_LOGI(BMS_UART_TAG, "Discard all data in the bms uart rx buffer");
+	ESP_ERROR_CHECK(uart_flush(UART_NUM_1));
 	
-//	ESP_LOGI(NC_UART_TAG,"Install nc uart driver");
-//	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, nc_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
-//	ESP_LOGI(NC_UART_TAG,"Configure nc uart parameter");
-//	ESP_ERROR_CHECK(uart_param_config(UART_NUM_2, &nc_uart_config));
-//	ESP_LOGI(NC_UART_TAG,"Assign signals of nc uart peripheral to gpio pins");
-//	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, RS2_TX, RS2_RX, RS2_DE, UART_PIN_NO_CHANGE));
-//	ESP_LOGI(NC_UART_TAG,"Set nc uart to rs485 half duplex mode");
-//	ESP_ERROR_CHECK(uart_set_mode(UART_NUM_2, UART_MODE_RS485_HALF_DUPLEX));
-//	ESP_LOGI(NC_UART_TAG,"Set nc uart read threshold timeout for TOUT feature");
-//	ESP_ERROR_CHECK(uart_set_rx_timeout(UART_NUM_2, nc_uart_read_tout));
-	// ESP_LOGI(NC_UART_TAG, "Test nc uart receive loop");
-	// nc_uart_help_echo_send(UART_NUM_2, "Start RS485 UART test.\r\n", 24);
-//	ESP_LOGI(NC_UART_TAG, "Discard all data in the nc uart rx buffer");
-//	ESP_ERROR_CHECK(uart_flush(UART_NUM_2));
+	ESP_LOGI(NC_UART_TAG,"Install nc uart driver");
+	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_2, nc_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
+	ESP_LOGI(NC_UART_TAG,"Configure nc uart parameter");
+	ESP_ERROR_CHECK(uart_param_config(UART_NUM_2, &nc_uart_config));
+	ESP_LOGI(NC_UART_TAG,"Assign signals of nc uart peripheral to gpio pins");
+	ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, RS2_TX, RS2_RX, RS2_DE, UART_PIN_NO_CHANGE));
+	ESP_LOGI(NC_UART_TAG,"Set nc uart to rs485 half duplex mode");
+	ESP_ERROR_CHECK(uart_set_mode(UART_NUM_2, UART_MODE_RS485_HALF_DUPLEX));
+	ESP_LOGI(NC_UART_TAG,"Set nc uart read threshold timeout for TOUT feature");
+	ESP_ERROR_CHECK(uart_set_rx_timeout(UART_NUM_2, nc_uart_read_tout));
+	ESP_LOGI(NC_UART_TAG, "Discard all data in the nc uart rx buffer");
+	ESP_ERROR_CHECK(uart_flush(UART_NUM_2));
 
 	ESP_LOGI(MASTER_GPIO_TAG, "Create master gpio task");
 	xTaskCreate(master_gpio_do_task, "master_gpio_do_task", 4096, NULL, 5, NULL);
@@ -1468,21 +1371,21 @@ void app_main(void) {
 	xTaskCreate(i2c_task, "i2c_task", 4096, NULL, 5, NULL);
 //	ESP_LOGI(AMR_STATE_TAG, "Create amr state task");
 //	xTaskCreate(amr_state_machine, "amr_state_machine", 4096, NULL, 7, NULL);
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Create imu and encoder task");
-	xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);
-//	ESP_LOGI(KINCO_TWAI_TAG, "Create kinco twai task");
-//	xTaskCreate(twai_task, "twai_task", 4096, NULL, 5, NULL);
-//	ESP_LOGI(BMS_UART_TAG, "Create bms uart task");
-//	xTaskCreate(bms_uart_task, "bms_uart_task", 4096, NULL, 5, NULL);
-//	ESP_LOGI(NC_UART_TAG, "Create nc uart task");
-//	xTaskCreate(nc_uart_task, "nc_uart_task", 4096, NULL, 1, NULL);
+//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Create imu and encoder task");
+//	xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);
+	ESP_LOGI(KINCO_TWAI_TAG, "Create kinco twai task");
+	xTaskCreate(kinco_twai_task, "kinco_twai_task", 4096, NULL, 1, NULL);
+	ESP_LOGI(BMS_UART_TAG, "Create bms uart task");
+	xTaskCreate(bms_uart_task, "bms_uart_task", 4096, NULL, 1, NULL);
+	ESP_LOGI(NC_UART_TAG, "Create nc uart task");
+	xTaskCreate(nc_uart_task, "nc_uart_task", 4096, NULL, 1, NULL);
 
 	esp_intr_dump(NULL);
 
 	vTaskDelay(pdMS_TO_TICKS(1000));
 
-	ESP_LOGI(SHOALBOARD_TEST_TAG, "Create shoalboard test task");
-	xTaskCreate(shoalboard_test_task, "shoalboard_test_task", 16000, NULL, 1, NULL);
+//	ESP_LOGI(SHOALBOARD_TEST_TAG, "Create shoalboard test task");
+//	xTaskCreate(shoalboard_test_task, "shoalboard_test_task", 16000, NULL, 1, NULL);
 
 	setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1492,22 +1395,23 @@ void app_main(void) {
     esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
 
 	bool write = false;
-	bool read = false;
+//	bool read = false;
     while(1){
 		char tmp[10] = {};
 		uint8_t D;
-		printf("\nWrite the commdand to execute\n");
-		printf("for writing IO -> W-DXX_H (w-dXX_h) or W-DXX_L (w-dXX_l)\n");
-		printf("for reading IO -> R-DXX (r-dXX)}\n");
-		printf("p2 for PASS2, p1 for PASS1, bms for BMS, bootkey for BOOTKEY\n");
+		printf("\nWrite the command to execute\n");
+		printf("for writing IO -> W-DXX_H (w-dXX_h) or W-DXX_L (w-dXX_l)   BMS: 50   PASS_1: 51   PASS_2: 52\n");
+//		printf("for reading IO -> R-DXX (r-dXX)}\n");
+//		printf("50 for BMS, 51 for PASS1, 52 for PASS2, 60 for BOOTKEY\n");
+
 		if (scanf("%9s", tmp) == 1) {
-			printf("Received : %s\n", tmp);
+			printf("Received : %s          ", tmp);
 			if(strcmp(tmp, "p2") == 0 || strcmp(tmp, "p1") == 0 || strcmp(tmp, "bms") == 0 || strcmp(tmp, "bootkey") == 0) {
 				// something
 			}
 			else {
 				write = (tmp[0] == 'W' || tmp[0] == 'w') ? 1 : 0;
-				read = (tmp[0] == 'R' || tmp[0] == 'r') ? 1 : 0;
+//				read = (tmp[0] == 'R' || tmp[0] == 'r') ? 1 : 0;
 				uint8_t index = 2;
 				uint8_t digits = 0;
 				if(tmp[1] == '-') {
@@ -1516,199 +1420,115 @@ void app_main(void) {
 						++index;
 					}
 					digits--;
+
 					if (digits > 0 && digits < 3) { // valid iff digits==1,2
 						if (digits == 2) {
 							D = (tmp[3] - '0') * 10 + (tmp[4] - '0'); 
-						} else {
+						} 
+						else {
 							D = tmp[3] - '0'; 
 						}
+						if (write) {
+							if (tmp[index + 1] == 'H' || tmp[index + 1] == 'h') {
+								printf("Writing HIGH on D%d\n", D);
+								switch(D) {
+									case 0: master_to_slave_buffer[1] |= 0x01; break;
+									case 1: master_to_slave_buffer[1] |= 0x02; break;
+									case 2: master_to_slave_buffer[1] |= 0x04; break;
+									case 3: master_to_slave_buffer[1] |= 0x08; break;
+									case 4: master_to_slave_buffer[1] |= 0x10; break;
+									case 5: master_to_slave_buffer[1] |= 0x20; break;
+									case 8: master_to_slave_buffer[1] |= 0x40; break;
+									case 9: master_to_slave_buffer[1] |= 0x80; break;
+									case 6: master_do |= 0x0001; break;
+									case 7: master_do |= 0x0002; break;
+									case 10: master_do |= 0x0004; break;
+									case 11: master_do |= 0x0008; break;
+									case 12: master_do |= 0x0010; break;
+									case 13: master_do |= 0x0020; break;
+									case 14: master_do |= 0x0040; break;
+									case 15: master_do |= 0x0080; break;
+									case 16: master_do |= 0x0100; break;
+									case 17: master_do |= 0x0200; break;
+									case 18: master_do |= 0x0400; break;
+									case 19: master_do |= 0x0800; break;
+									case 50: master_to_slave_buffer[2] |= 0x01; break; // BMS
+									case 51: master_to_slave_buffer[2] |= 0x02; break; // PASS_1
+									case 52: master_to_slave_buffer[2] |= 0x04; break; // PASS_2
+									default: printf("No such kind of IO\n"); break;
+								}
+								write = false;
+							} 
+							else if (tmp[index + 1] == 'L' || tmp[index + 1] == 'l') {
+								printf("Writing LOW on D%d\n", D);
+								switch(D) {
+									case 0: master_to_slave_buffer[1] &= 0xFE; break;
+									case 1: master_to_slave_buffer[1] &= 0xFD; break;
+									case 2: master_to_slave_buffer[1] &= 0xFB; break;
+									case 3: master_to_slave_buffer[1] &= 0xF7; break;
+									case 4: master_to_slave_buffer[1] &= 0xEF; break;
+									case 5: master_to_slave_buffer[1] &= 0xDF; break;
+									case 8: master_to_slave_buffer[1] &= 0xBF; break;
+									case 9: master_to_slave_buffer[1] &= 0x7F; break;
+									case 6: master_do &= 0xFFFE; break;
+									case 7: master_do &= 0xFFFD; break;
+									case 10: master_do &= 0xFFFB; break;
+									case 11: master_do &= 0xFFF7; break;
+									case 12: master_do &= 0xFFEF; break;
+									case 13: master_do &= 0xFFDF; break;
+									case 14: master_do &= 0xFFBF; break;
+									case 15: master_do &= 0xFF7F; break;
+									case 16: master_do &= 0xFEFF; break;
+									case 17: master_do &= 0xFDFF; break;
+									case 18: master_do &= 0xFBFF; break;
+									case 19: master_do &= 0xF7FF; break;
+									case 50: master_to_slave_buffer[2] &= 0xFE; break; // BMS
+									case 51: master_to_slave_buffer[2] &= 0xFD; break; // PASS_1
+									case 52: master_to_slave_buffer[2] &= 0xFB; break; // PASS_2
+									default: printf("No such kind of IO\n"); break;
+								}
+								write = false;
+							} 
+							else {
+								printf("INVALID!!\n");
+							}
+						} // back to if (write)
 
-					if (write) {
-						if (tmp[index + 1] == 'H' || tmp[index + 1] == 'h') {
-							printf("Writing HIGH on D%d\n", D);
-							if((D >= 0 && D <=5) || D == 8 || D == 9) { // write to slave
-								switch(D) {
-									// DO_9, DO_8, DO_5, DO_4, DO_3, DO_2, DO_1, DO_0 on slave, master_to_slave_buffer[1]
-									case 0:
-										master_to_slave_buffer[1] |= 0x01;
-										break;
-									case 1:
-										master_to_slave_buffer[1] |= 0x02;
-										break;
-									case 2:
-										master_to_slave_buffer[1] |= 0x04;
-										break;
-									case 3:
-										master_to_slave_buffer[1] |= 0x08;
-										break;
-									case 4:
-										master_to_slave_buffer[1] |= 0x10;
-										break;
-									case 5:
-										master_to_slave_buffer[1] |= 0x20;
-										break;
-									case 8:
-										master_to_slave_buffer[1] |= 0x40;
-										break;
-									case 9:
-										master_to_slave_buffer[1] |= 0x80;
-										break;
-								}
-							}
-							else if ((D<=19 && D>=10) || D==7 || D==6){ 
-								// MSB to LSB: DO_19 to DO_10, DO_7, DO_6, master_do
-								switch(D) {
-									case 6:
-										master_do |= 0x0001;
-										break;
-									case 7:
-										master_do |= 0x0002;
-										break;
-									case 10:
-										master_do |= 0x0004;
-										break;
-									case 11:
-										master_do |= 0x0008;
-										break;
-									case 12:
-										master_do |= 0x0010;
-										break;
-									case 13:
-										master_do |= 0x0020;
-										break;
-									case 14:
-										master_do |= 0x0040;
-										break;
-									case 15:
-										master_do |= 0x0080;
-										break;
-									case 16:
-										master_do |= 0x0100;
-										break;
-									case 17:
-										master_do |= 0x0200;
-										break;
-									case 18:
-										master_do |= 0x0400;
-										break;
-									case 19:
-										master_do |= 0x0800;
-										break;
-								}
-							}
-							else {
-								printf("No such kind of IO\n");
-							}
-							write = false;
-						} else if (tmp[index + 1] == 'L' || tmp[index + 1] == 'l') {
-							printf("Writing LOW on D%d\n", D);
-							if((D >= 0 && D <=5) || D == 8 || D == 9) { // write to slave
-								switch(D) {
-									case 0:
-										master_to_slave_buffer[1] &= 0xFE;
-										break;
-									case 1:
-										master_to_slave_buffer[1] &= 0xFD;
-										break;
-									case 2:
-										master_to_slave_buffer[1] &= 0xFB;
-										break;
-									case 3:
-										master_to_slave_buffer[1] &= 0xF7;
-										break;
-									case 4:
-										master_to_slave_buffer[1] &= 0xEF;
-										break;
-									case 5:
-										master_to_slave_buffer[1] &= 0xDF;
-										break;
-									case 8:
-										master_to_slave_buffer[1] &= 0xBF;
-										break;
-									case 9:
-										master_to_slave_buffer[1] &= 0x7F;
-										break;
-								}
-							}
-							else if ((D<=19 && D>=10) || D==7 || D==6){ 
-								// MSB to LSB: DO_19 to DO_10, DO_7, DO_6, master_do
-								switch(D) {
-									case 6:
-										master_do &= 0xFFFE;
-										break;
-									case 7:
-										master_do &= 0xFFFD;
-										break;
-									case 10:
-										master_do &= 0xFFFB;
-										break;
-									case 11:
-										master_do &= 0xFFF7;
-										break;
-									case 12:
-										master_do &= 0xFFEF;
-										break;
-									case 13:
-										master_do &= 0xFFDF;
-										break;
-									case 14:
-										master_do &= 0xFFBF;
-										break;
-									case 15:
-										master_do &= 0xFF7F;
-										break;
-									case 16:
-										master_do &= 0xFEFF;
-										break;
-									case 17:
-										master_do &= 0xFDFF;
-										break;
-									case 18:
-										master_do &= 0xFBFF;
-										break;
-									case 19:
-										master_do &= 0xF7FF;
-										break;
-								}
-							}
-							else {
-								printf("No such kind of IO\n");
-							}
-							write = false;
-						} else {
-							printf("INVALID!!\n");
-						}
-						} else if (read) {
-							bool status = false;
-							if(D <=23 && D>=16) {
-								status = slave_to_master_buffer[0] & (0x01 << (D-16));
-								printf("Read Value of D%d : %d\n", D, status);
-							}
-							else if (D<=15 && D>=8) {
-								status = slave_to_master_buffer[1] & (0x01 << (D-8));
-								printf("Read Value of D%d : %d\n", D, status);
-							}
-							else if (D<=7 && D>=0) {
-								status = slave_to_master_buffer[1] & (0x01 << (D));
-								printf("Read Value of D%d : %d\n", D, status);
-							}
-							else {
-								printf("No such kind of IO\n");
-							}
-							read = false;
-						}
+						// else if (read) {
+						// 	bool status = false;
+						// 	if (D<=23 && D>=0) {
+						// 		status = slave_di & (0x01 << (D));
+						// 		printf("Read Value of D%d : %d\n", D, status);
+						// 	}
+						// 	else {
+						// 		printf("No such kind of IO\n");
+						// 	}
+						// 	read = false;
+						// } // back to if (read)
+
 						else {
 							printf("INVALID!!\n");
 						}
-					}
+					} // back to if (digits > 0 && digits < 3)
+
 					else {
 						printf("No such kind of IO\n");
 					}
-				}
+				} // back to if (tmp[1] == '-')
+		
 				else {
 					printf("INVALID!!\n");
 				}
 			}
-    	}	
-    }
+    	} // back to if (scanf("%9s", tmp) == 1)
+		vTaskDelay(pdMS_TO_TICKS(500));
+		printf("Status BOOTKEY DI 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9  8  7  6  5  4  3  2  1  0 \n");
+		printf("       %d          %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d  %d\n", (uint8_t) isBootkeylongpressed,
+		(uint8_t) ((slave_di & 0x800000)>>23), (uint8_t) ((slave_di & 0x400000)>>22), (uint8_t) ((slave_di & 0x200000)>>21), (uint8_t) ((slave_di & 0x100000)>>20), 
+		(uint8_t) ((slave_di & 0x080000)>>19), (uint8_t) ((slave_di & 0x040000)>>18), (uint8_t) ((slave_di & 0x020000)>>17), (uint8_t) ((slave_di & 0x010000)>>16), 
+		(uint8_t) ((slave_di & 0x008000)>>15), (uint8_t) ((slave_di & 0x004000)>>14), (uint8_t) ((slave_di & 0x002000)>>13), (uint8_t) ((slave_di & 0x001000)>>12),
+		(uint8_t) ((slave_di & 0x000800)>>11), (uint8_t) ((slave_di & 0x000400)>>10), (uint8_t) ((slave_di & 0x000200)>>9), (uint8_t) ((slave_di & 0x000100)>>8),
+		(uint8_t) ((slave_di & 0x000080)>>7), (uint8_t) ((slave_di & 0x000040)>>6), (uint8_t) ((slave_di & 0x000020)>>5), (uint8_t) ((slave_di & 0x000010)>>4),
+		(uint8_t) ((slave_di & 0x000008)>>3), (uint8_t) ((slave_di & 0x000004)>>2), (uint8_t) ((slave_di & 0x000002)>>1), (uint8_t) ((slave_di & 0x000001)));
+    } // back to while (1)
 }
