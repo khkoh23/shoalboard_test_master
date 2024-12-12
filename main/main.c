@@ -1359,7 +1359,7 @@ void app_main(void) {
 		(uint8_t) ((slave_di & 0x000800)>>11), (uint8_t) ((slave_di & 0x000400)>>10), (uint8_t) ((slave_di & 0x000200)>>9), (uint8_t) ((slave_di & 0x000100)>>8),
 		(uint8_t) ((slave_di & 0x000080)>>7), (uint8_t) ((slave_di & 0x000040)>>6), (uint8_t) ((slave_di & 0x000020)>>5), (uint8_t) ((slave_di & 0x000010)>>4),
 		(uint8_t) ((slave_di & 0x000008)>>3), (uint8_t) ((slave_di & 0x000004)>>2), (uint8_t) ((slave_di & 0x000002)>>1), (uint8_t) ((slave_di & 0x000001)));
-		printf("Estop pulses interval count: %d   Left encoder: %ld   Right encoder: %ld\n", interval_count, left_count_now, right_count_now);
+		printf("Estop pulses interval count: %d   Left encoder: %ld   Right encoder: %ld\n", interval_count, left_counter_now, right_counter_now);
 		printf("Acc_X: %f   Acc_Y: %f   Acc_Z: %f   Gyr_X: %f   Gyr_Y: %f   Gyr_Z: %f\n", accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
     } // back to while (1)
 }
