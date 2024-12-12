@@ -70,7 +70,6 @@
 // GPIO_NUM_48
 
 #define my_G 9.80665;
-#define my_MAX 50
 
 static const char *MASTER_GPIO_TAG = "master_gpio";
 static const char *ESTOP_LEDC_TAG = "estop_ledc";
@@ -85,7 +84,6 @@ static const char *SHOALBOARD_TEST_TAG = "shoalboard_test";
 /* -------------------- global -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
 */
 
-float orientation_q_[4];
 uint8_t slave_do; // MSB to LSB: DO_9, DO_8, DO_5 to DO_0
 uint8_t slave_pass1_pass2_bms; //MSB to LSB: x, x, x, x, x, PASS_2, PASS_1, BMS
 uint16_t master_do; // Bit 11 to LSB: DO_19 to DO_10, DO_7, DO_6
@@ -104,109 +102,27 @@ uint8_t slave_to_master_buffer[6] = {
 	0b00000000, // at slave: DI_7, DI_6, DI_5, DI_4, DI_3, DI_2, DI_1, DI_0
 	0b00000000, // at slave: DO_9. DO_8. DO_5. DO_4. DO_3, DO_2, DO_1, DO_0
 	0b00000000, // at slave: x, x, x, x, x, x, x, BOOTKEY
-	0b00000000, // esp_reset_reason (SLAVE)
+	0b00000000, // interval count
 };
-bool isResetpressed;
-bool toStop; // stop signal during DirectLinear and DirectRotation srv
-bool toImurest; // calibrate imu at rest
-uint8_t amr_state, previous_amr_state;
-bool is_new_amr_state, toDisableKinco;
-bool new_master_gpio_do;
-uint16_t left_kinco_error, right_kinco_error;
-bool new_kinco;
-int8_t kinco_mode = 3;
-bool new_position;
-bool new_speed;
-float left_profile_speed = 636.61975, left_profile_acc = 10.61033, left_profile_dec = 10.61033;  // 0.5m/s, 0.5m/s2, 0.5m/s2
-float right_profile_speed = 636.61975, right_profile_acc = 10.61033, right_profile_dec = 10.61033; 
-uint16_t kinco_Kvp = 345, kinco_Kvi = 0, kinco_Kvi32 = 3; 
-uint8_t kinco_SpeedFbN = 7; 
-int16_t kinco_Kpp = 10, kinco_KVelocityFF = 100;
-int32_t	left_kinco_pos, right_kinco_pos;
-float left_kinco_speed, right_kinco_speed; 
 float accel_fsr, gyro_fsr;
 float accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z;
 float accel_x_calib, accel_y_calib, accel_z_calib, gyro_x_calib, gyro_y_calib, gyro_z_calib;
-float temp_esp; 
 const uint8_t WRA = 0b1000; // Write Address (0x8+address) 0b1000
 const uint8_t WRD = 0b1010; // Write Data (0xA+data) 0b1010
 const uint8_t RD0 = 0b1100; // Read bytes 0 + 1 (2LSB) (0xC+address) 0b1100
 const uint8_t RD1 = 0b1110; // Read Bytes 2 + 3 (2MSB) (0xE) 0b1110
 const uint8_t NOP = 0b0000; // Output read Register 
 const uint8_t HWA = 0b0000;
-uint32_t amip4k_statidrev, amip4k_cfg1 = 0x00FF0900, amip4k_cfg2 = 0x0000000A, amip4k_cfg3 = 0x00008000; // these are the reset value of cfgn
+uint32_t amip4k_cfg1 = 0x00FF0900, amip4k_cfg2 = 0x0000000A, amip4k_cfg3 = 0x00008000; // these are the reset value of cfgn
 int32_t left_count_now, right_count_now, left_count_prev, right_count_prev;
 int32_t left_counter_now, right_counter_now, left_counter_prev, right_counter_prev;
-int64_t odom_time_now, odom_time_prev;
-float left_speed_m, right_speed_m, left_speed_filtered, right_speed_filtered;
-const uint16_t cpr = 4096;
-const float wheel_diameter = 0.15, wheel_base = 0.469;
-float linear_vel, angular_vel;
-float heading, x_pos, y_pos;
-
-void odom_help_euler_to_quat(float roll, float pitch, float yaw, float *q) {
-	float cy = cos(yaw * 0.5);
-	float sy = sin(yaw * 0.5);
-	float cp = cos(pitch * 0.5);
-	float sp = sin(pitch * 0.5);
-	float cr = cos(roll * 0.5);
-	float sr = sin(roll * 0.5);
-	orientation_q_[0] = cy * cp * cr + sy * sp * sr;
-	orientation_q_[1] = cy * cp * sr - sy * sp * cr;
-	orientation_q_[2] = sy * cp * sr + cy * sp * cr;
-	orientation_q_[3] = sy * cp * cr - cy * sp * sr;
-}
-
-int64_t get_millisecond(void) { // Get the number of seconds since boot
-	return (esp_timer_get_time() / 1000ULL);
-}
-
-typedef struct {
-    float values[my_MAX];
-    int k; // k stores the index of the current array read to create a circular memory through the array
-    int data_points_count;
-    float out;
-    uint8_t i; // i is a loop counter
-} moving_average_filter_t;
-
-void moving_average_filter_begin(moving_average_filter_t* obj, const uint8_t set_data_points_count) {
-    obj->k = 0; //initialize so that we start to write at index 0
-    if (set_data_points_count < my_MAX) obj->data_points_count = set_data_points_count;
-    else obj->data_points_count = my_MAX;
-    for (obj->i = 0; obj->i < obj->data_points_count; obj->i++) obj->values[obj->i] = 0; // fill the array with 0's
-}
-
-float moving_average_filter_process(moving_average_filter_t* obj, const float in) {
-    obj->out = 0;
-    obj->values[obj->k] = in;
-    obj->k = (obj->k + 1) % obj->data_points_count;
-    for (obj->i = 0; obj->i < obj->data_points_count; obj->i++) obj->out += obj->values[obj->i]; 
-    return obj->out / obj->data_points_count;
-}
-
-moving_average_filter_t odom_left_speed_filter, odom_right_speed_filter;
-
 const int bms_uart_buffer_size = 132; // const int bms_uart_buffer_size = 127; // 
 const uint8_t bms_uart_read_tout = 3; // 3.5T * 8 = 28 ticks, TOUT=3 -> ~24..33 ticks
 const uint8_t bms_uart_buffer_bias = 73;
-int16_t bms_temperature_1, bms_temperature_2, bms_temperature_3;
-int16_t bms_current;
-uint16_t bms_voltage, bms_mh, bms_capacity ,bms_cycle;
-
-typedef struct {
-	float temperature;
-	float current;
-	float voltage;
-	float battery_level;
-	uint16_t cycle;
-} shoalbot_bms_t;
-
-shoalbot_bms_t my_bms;
 const int nc_uart_buffer_size = 127;
 const uint8_t nc_uart_read_tout = 3; // 3.5T * 8 = 28 ticks, TOUT=3 -> ~24..33 ticks
 bool isBootkeylongpressed;
-esp_reset_reason_t master_reason, slave_reason;
-// uint8_t crash_i; // malicious counter
+uint8_t interval_count;
 
 
 /* -------------------- master gpio do -------------------- -------------------- -------------------- -------------------- -------------------- --------------------
@@ -214,21 +130,18 @@ esp_reset_reason_t master_reason, slave_reason;
 
 void master_gpio_do_task(void* arg) {
 	while(1) {
-//		if(new_master_gpio_do) {
-//			new_master_gpio_do = false;
-            gpio_set_level(DO_6, master_do & 0x0001);
-            gpio_set_level(DO_7, master_do & 0x0002);
-            gpio_set_level(DO_10, master_do & 0x0004);
-            gpio_set_level(DO_11, master_do & 0x0008);
-            gpio_set_level(DO_12, master_do & 0x0010);
-            gpio_set_level(DO_13, master_do & 0x0020);
-            gpio_set_level(DO_14, master_do & 0x0040);
-            gpio_set_level(DO_15, master_do & 0x0080);
-            gpio_set_level(DO_16, master_do & 0x0100);
-            gpio_set_level(DO_17, master_do & 0x0200);
-            gpio_set_level(DO_18, master_do & 0x0400);
-            gpio_set_level(DO_19, master_do & 0x0800);
-//		}
+        gpio_set_level(DO_6, master_do & 0x0001);
+        gpio_set_level(DO_7, master_do & 0x0002);
+        gpio_set_level(DO_10, master_do & 0x0004);
+        gpio_set_level(DO_11, master_do & 0x0008);
+        gpio_set_level(DO_12, master_do & 0x0010);
+        gpio_set_level(DO_13, master_do & 0x0020);
+        gpio_set_level(DO_14, master_do & 0x0040);
+        gpio_set_level(DO_15, master_do & 0x0080);
+        gpio_set_level(DO_16, master_do & 0x0100);
+        gpio_set_level(DO_17, master_do & 0x0200);
+        gpio_set_level(DO_18, master_do & 0x0400);
+        gpio_set_level(DO_19, master_do & 0x0800);
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 	vTaskDelete(NULL);
@@ -328,17 +241,14 @@ void i2c_master_help_get(uint8_t *cmd) {
 	vTaskDelay(pdMS_TO_TICKS(1));
 	slave_di = ((uint32_t)slave_to_master_buffer[0]) << 16 | ((uint32_t)slave_to_master_buffer[1]) << 8 | ((uint32_t)slave_to_master_buffer[2]);
 	slave_do = slave_to_master_buffer[3];
-	amr_state = slave_to_master_buffer[4];
 	isBootkeylongpressed = (slave_to_master_buffer[4] & 0x1);
-	slave_reason = slave_to_master_buffer[5]; 
+	interval_count = slave_to_master_buffer[5]; 
 	all_do = (uint32_t)(master_do & 0xFFC) << 8 | (uint32_t)(slave_do & 0xC0) << 2 | (uint32_t)(master_do & 0x3) << 6 | (uint32_t)(slave_do & 0x3F) << 0;
 }
 
 void i2c_task(void *arg) { // I2C master task
 	while (1) {
 		i2c_master_help_get(master_to_slave_read_cmd);
-//		if ((slave_di & 0x00200000) >> 21) isResetpressed = true;
-// 		else isResetpressed = false;
  		vTaskDelay(pdMS_TO_TICKS(50));
  		i2c_master_help_set(master_to_slave_buffer);
  		vTaskDelay(pdMS_TO_TICKS(50));
@@ -1014,20 +924,12 @@ int32_t amip4k_spi_help_mval(const spi_device_handle_t handle) {
 void spi_task(void *arg) { // IMU and safety encoder data task
 	while (1) {
 
-		if (toImurest) {
-			gyro_x_calib = icm42688_spi_help_get_gyro_x();
-			gyro_y_calib = icm42688_spi_help_get_gyro_y();
-			gyro_z_calib = icm42688_spi_help_get_gyro_z();
-			toImurest = false;
-		}
-		else {
-			accel_x = icm42688_spi_help_get_accel_x() - accel_x_calib; 
-			accel_y = icm42688_spi_help_get_accel_y() - accel_y_calib; 
-			accel_z = icm42688_spi_help_get_accel_z() - accel_z_calib; 
-			gyro_x = icm42688_spi_help_get_gyro_x() - gyro_x_calib; 
-			gyro_y = icm42688_spi_help_get_gyro_y() - gyro_y_calib; 
-			gyro_z = icm42688_spi_help_get_gyro_z() - gyro_z_calib; 
-		}
+		accel_x = icm42688_spi_help_get_accel_x() - accel_x_calib; 
+		accel_y = icm42688_spi_help_get_accel_y() - accel_y_calib; 
+		accel_z = icm42688_spi_help_get_accel_z() - accel_z_calib; 
+		gyro_x = icm42688_spi_help_get_gyro_x() - gyro_x_calib; 
+		gyro_y = icm42688_spi_help_get_gyro_y() - gyro_y_calib; 
+		gyro_z = icm42688_spi_help_get_gyro_z() - gyro_z_calib; 
 
 		left_count_now = amip4k_spi_help_mval(spi_device_handle_l) * -1; // beware of the direction
 		right_count_now = amip4k_spi_help_mval(spi_device_handle_r);
@@ -1051,41 +953,6 @@ void spi_task(void *arg) { // IMU and safety encoder data task
 		}
 		else {} 
 		right_count_prev = right_count_now;
-		// encoder_msg.left = left_counter_now;
-		// encoder_msg.right = right_counter_now;
-
-		odom_time_now= esp_timer_get_time();
-		float vel_dt = (odom_time_now - odom_time_prev) / 1000000.0;
-		odom_time_prev = odom_time_now;
-		left_speed_m = (left_counter_now - left_counter_prev) / vel_dt / cpr * M_PI * wheel_diameter; // measure m/s
-		right_speed_m = (right_counter_now - right_counter_prev) / vel_dt / cpr * M_PI * wheel_diameter; // measure m/s
-		if (left_counter_now==left_counter_prev) {
-			left_speed_m = 0; // if (abs(left_counter_now-left_counter_prev) < 2) left_speed_m = 0;
-		}
-		if (right_counter_now==right_counter_prev) {
-			right_speed_m = 0; // if (abs(right_counter_now-right_counter_prev) < 2) right_speed_m = 0; // 
-		}
-		left_counter_prev = left_counter_now;
-		right_counter_prev = right_counter_now;
-		left_speed_filtered = moving_average_filter_process(&odom_left_speed_filter, left_speed_m);
-		right_speed_filtered = moving_average_filter_process(&odom_right_speed_filter, right_speed_m);
-		float Vx = (right_speed_filtered + left_speed_filtered) / 2.0; // robot m/s
-		float Vy = 0.0;
-		float Wz = (right_speed_filtered - left_speed_filtered) / wheel_base; // robot rad/s
-		linear_vel = Vx;
-		angular_vel = Wz;
-		// Odom update
-		float delta_heading = Wz * vel_dt; // radians
-		heading += delta_heading;
-		float cos_h = cos(heading);
-		float sin_h = sin(heading);
-		float delta_x = (Vx * cos_h - Vy * sin_h) * vel_dt; // m
-		float delta_y = (Vx * sin_h + Vy * cos_h) * vel_dt; // m
-		x_pos += delta_x;
-		y_pos += delta_y;
-		if(heading > M_PI) heading -= 2 * M_PI;
-        else if(heading <= -M_PI) heading += 2 * M_PI;
-		odom_help_euler_to_quat(0, 0, heading, orientation_q_);
 
 		vTaskDelay(pdMS_TO_TICKS(5));
 	}
@@ -1272,10 +1139,6 @@ void app_main(void) {
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set imu power mode");
 	icm42688_spi_pwr_mgmt0(0b00001111); // -:00, TEMP_DIS:0, IDLE:0, GYROMODE:11, ACCEL_MODE:11
 	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for imu turn on
-	// ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set imu gyro notch filter frequency and bandwidth");
-	// icm42688_spi_help_gyro_nf_freq(1000);
-	// ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set imu anti alias filter");
-	// ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set imu user programmable offset");
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Select imu ui filter block: order");
 	icm42688_spi_help_gyro_ui_filter_order(UI_ORDER3);
 	icm42688_spi_help_accel_ui_filter_order(UI_ORDER3);
@@ -1298,12 +1161,6 @@ void app_main(void) {
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Get sincos encoder statidrev, cfg1, cfg2, cfg3");
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert left stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert right stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_r));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_l));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_r));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_l));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_r));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_l));
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_r));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Reset and reconfigure IC left and right");
 	amip4k_spi_set_cmd(spi_device_handle_l, 0x08); // RESIC 0b00001000
 	amip4k_spi_set_cmd(spi_device_handle_r, 0x08); // RESIC 0b00001000
@@ -1326,16 +1183,10 @@ void app_main(void) {
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_r)); 
 
-	moving_average_filter_begin(&odom_left_speed_filter, 20);
-	moving_average_filter_begin(&odom_right_speed_filter, 20);
-
 	ESP_LOGI(MASTER_I2C_TAG, "Allocate i2c master bus");
 	ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_master_bus_config, &i2c_master_bus_handle));
 	ESP_LOGI(MASTER_I2C_TAG, "Add i2c master bus device");
 	ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_master_bus_handle, &i2c_device_config, &i2c_master_dev_handle));
-//	ESP_LOGI(MASTER_I2C_TAG, "Write i2c data");
-//	i2c_master_help_set(master_to_slave_buffer); // Essential to turn on DO_0, DO_1, DO_3
-//	vTaskDelay(pdMS_TO_TICKS(1000)); // Essential wait for kinco to power up
 
 	ESP_LOGI(BMS_UART_TAG,"Install bms uart driver");
 	ESP_ERROR_CHECK(uart_driver_install(UART_NUM_1, bms_uart_buffer_size * 2, 0, 0, NULL, 0)); // no tx buffer, no event queue
@@ -1365,14 +1216,10 @@ void app_main(void) {
 
 	ESP_LOGI(MASTER_GPIO_TAG, "Create master gpio task");
 	xTaskCreate(master_gpio_do_task, "master_gpio_do_task", 4096, NULL, 5, NULL);
-//	ESP_LOGI(TEMPERATURE_SENSOR_TAG, "Create temperature sensor task");
-//	xTaskCreate(temperature_sensor_task, "temperature_sensor_task", 4096, NULL, 1, NULL);
 	ESP_LOGI(MASTER_I2C_TAG, "Create i2c task");
 	xTaskCreate(i2c_task, "i2c_task", 4096, NULL, 5, NULL);
-//	ESP_LOGI(AMR_STATE_TAG, "Create amr state task");
-//	xTaskCreate(amr_state_machine, "amr_state_machine", 4096, NULL, 7, NULL);
-//	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Create imu and encoder task");
-//	xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Create imu and encoder task");
+	xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);
 	ESP_LOGI(KINCO_TWAI_TAG, "Create kinco twai task");
 	xTaskCreate(kinco_twai_task, "kinco_twai_task", 4096, NULL, 1, NULL);
 	ESP_LOGI(BMS_UART_TAG, "Create bms uart task");
@@ -1395,14 +1242,11 @@ void app_main(void) {
     esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
 
 	bool write = false;
-//	bool read = false;
     while(1){
 		char tmp[10] = {};
 		uint8_t D;
 		printf("\nWrite the command to execute\n");
 		printf("for writing IO -> W-DXX_H (w-dXX_h) or W-DXX_L (w-dXX_l)   BMS: 50   PASS_1: 51   PASS_2: 52\n");
-//		printf("for reading IO -> R-DXX (r-dXX)}\n");
-//		printf("50 for BMS, 51 for PASS1, 52 for PASS2, 60 for BOOTKEY\n");
 
 		if (scanf("%9s", tmp) == 1) {
 			printf("Received : %s          ", tmp);
@@ -1411,7 +1255,6 @@ void app_main(void) {
 			}
 			else {
 				write = (tmp[0] == 'W' || tmp[0] == 'w') ? 1 : 0;
-//				read = (tmp[0] == 'R' || tmp[0] == 'r') ? 1 : 0;
 				uint8_t index = 2;
 				uint8_t digits = 0;
 				if(tmp[1] == '-') {
@@ -1493,24 +1336,10 @@ void app_main(void) {
 								printf("INVALID!!\n");
 							}
 						} // back to if (write)
-
-						// else if (read) {
-						// 	bool status = false;
-						// 	if (D<=23 && D>=0) {
-						// 		status = slave_di & (0x01 << (D));
-						// 		printf("Read Value of D%d : %d\n", D, status);
-						// 	}
-						// 	else {
-						// 		printf("No such kind of IO\n");
-						// 	}
-						// 	read = false;
-						// } // back to if (read)
-
 						else {
 							printf("INVALID!!\n");
 						}
 					} // back to if (digits > 0 && digits < 3)
-
 					else {
 						printf("No such kind of IO\n");
 					}
@@ -1530,5 +1359,7 @@ void app_main(void) {
 		(uint8_t) ((slave_di & 0x000800)>>11), (uint8_t) ((slave_di & 0x000400)>>10), (uint8_t) ((slave_di & 0x000200)>>9), (uint8_t) ((slave_di & 0x000100)>>8),
 		(uint8_t) ((slave_di & 0x000080)>>7), (uint8_t) ((slave_di & 0x000040)>>6), (uint8_t) ((slave_di & 0x000020)>>5), (uint8_t) ((slave_di & 0x000010)>>4),
 		(uint8_t) ((slave_di & 0x000008)>>3), (uint8_t) ((slave_di & 0x000004)>>2), (uint8_t) ((slave_di & 0x000002)>>1), (uint8_t) ((slave_di & 0x000001)));
+		printf("Estop pulses interval count: %d   Left encoder: %ld   Right encoder: %ld\n", interval_count, left_count_now, right_count_now);
+		printf("Acc_X: %f   Acc_Y: %f   Acc_Z: %f   Gyr_X: %f   Gyr_Y: %f   Gyr_Z: %f\n", accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
     } // back to while (1)
 }
