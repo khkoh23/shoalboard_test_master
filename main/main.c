@@ -114,6 +114,7 @@ const uint8_t RD1 = 0b1110; // Read Bytes 2 + 3 (2MSB) (0xE) 0b1110
 const uint8_t NOP = 0b0000; // Output read Register 
 const uint8_t HWA = 0b0000;
 uint32_t amip4k_cfg1 = 0x00FF0900, amip4k_cfg2 = 0x0000000A, amip4k_cfg3 = 0x00008000; // these are the reset value of cfgn
+uint16_t left_amip4k_stat, right_amip4k_stat;
 int32_t left_count_now, right_count_now, left_count_prev, right_count_prev;
 int32_t left_counter_now, right_counter_now, left_counter_prev, right_counter_prev;
 const int bms_uart_buffer_size = 132; // const int bms_uart_buffer_size = 127; // 
@@ -698,7 +699,7 @@ int32_t amip4k_spi_get_mval(const spi_device_handle_t handle) { // SPI read 32 b
 7 ECOFF ; 6 ESGAIN ; 5 ECGAIN ; 4 EABZ ; 3 EFAST ; 2 ESADC ; 1 ECADC ; 0 EVLOW
 Reset value: 0x43000000 i.e. 0b 0100 0011 0000 0000 0000 0000 0000 0000
 */ 
-unsigned int amip4k_spi_assert_stat_id_rev(const spi_device_handle_t handle) { // SPI read 32 bit
+unsigned int amip4k_spi_get_stat_id_rev(const spi_device_handle_t handle) { // SPI read 32 bit
 	uint16_t sendbuf, recvbuf1, recvbuf2, recvbuf3;
 	sendbuf = SPI_SWAP_DATA_TX(((RD0 << 12) | (HWA << 8) | AMIP4K_STAT_A), 16);
 	spi_transaction_t trans = {.length = 16, .tx_buffer = &sendbuf, .rx_buffer = &recvbuf1};
@@ -712,8 +713,21 @@ unsigned int amip4k_spi_assert_stat_id_rev(const spi_device_handle_t handle) { /
 	recvbuf2 = SPI_SWAP_DATA_RX(recvbuf2, 16);
 	recvbuf3 = SPI_SWAP_DATA_RX(recvbuf3, 16);
 	uint32_t recvbuf = recvbuf3<<16 | recvbuf2;
-	assert(recvbuf3 == 0x4300);
+	// assert(recvbuf3 == 0x4300);
 	return recvbuf;
+}
+
+uint8_t amip4k_spi_help_assert_asicid_asicrev(const spi_device_handle_t handle){
+	uint32_t buffer = amip4k_spi_get_stat_id_rev(handle);
+	uint8_t value = (buffer & 0xFF000000) >> 24;
+	assert(value == 0x43);
+	return value;
+}
+
+uint16_t amip4k_spi_help_monitor(const spi_device_handle_t handle){
+	uint32_t buffer = amip4k_spi_get_stat_id_rev(handle);
+	uint16_t value = (buffer & 0x0000FFFF) >> 0;
+	return value;
 }
 
 /* 31 TRI 0 ; 30 LKOVL 0 ; 29 LOFF  0 ; 28 LGAIN 0 ; 27 LABZ 0 ; 26 LFAST 0 ; 25 LADC 0 ; 24 LVLOW 0 ;
@@ -933,6 +947,8 @@ void spi_task(void *arg) { // IMU and safety encoder data task
 
 		left_count_now = amip4k_spi_help_mval(spi_device_handle_l) * -1; // beware of the direction
 		right_count_now = amip4k_spi_help_mval(spi_device_handle_r);
+		left_amip4k_stat = amip4k_spi_help_monitor(spi_device_handle_l);
+		right_amip4k_stat = amip4k_spi_help_monitor(spi_device_handle_r);
 		if (left_count_now > left_count_prev) { // moving forward or reset after moving backward
 			if (abs(left_count_now - left_count_prev) > 1024) left_counter_now = left_counter_now - (2048 - left_count_now + left_count_prev); //reset backward
 			else left_counter_now = left_counter_now + (left_count_now - left_count_prev); //moving forward
@@ -1154,34 +1170,37 @@ void app_main(void) {
 	icm42688_spi_help_resting_calibration(500);
 	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for imu resting calibration
 
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Allocate left sincos encoder device on spi bus");
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Allocate left sincos device on spi bus");
 	ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &spi_device_interface_config_l, &spi_device_handle_l));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Allocate right sincos encoder device on spi bus");
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Allocate right sincos device on spi bus");
 	ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &spi_device_interface_config_r, &spi_device_handle_r));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Get sincos encoder statidrev, cfg1, cfg2, cfg3");
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert left stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_l));
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert right stat/id/rev: 0x%08X", amip4k_spi_assert_stat_id_rev(spi_device_handle_r));
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Assert sincos id rev");
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert left asic id/rev: 0x%02X", amip4k_spi_help_assert_asicid_asicrev(spi_device_handle_l));
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_assert right asic id/rev: 0x%02X", amip4k_spi_help_assert_asicid_asicrev(spi_device_handle_r));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Reset and reconfigure IC left and right");
 	amip4k_spi_set_cmd(spi_device_handle_l, 0x08); // RESIC 0b00001000
 	amip4k_spi_set_cmd(spi_device_handle_r, 0x08); // RESIC 0b00001000
 	vTaskDelay(pdMS_TO_TICKS(200)); // Essential wait for sincos encoder reset and reconfig
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set sincos encoder interpolation rate");
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set sincos interpolation rate");
 	amip4k_spi_help_interpolation_rate(spi_device_handle_l, Interpolation_rate_4);
 	amip4k_spi_help_interpolation_rate(spi_device_handle_r, Interpolation_rate_4);
-	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set sincos encoder cfg3 to default value");
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Set sincos cfg3: DISZ");
+	amip4k_cfg3 = 0x00008100; // DISZ=1
 	amip4k_spi_set_cfg3(spi_device_handle_l, amip4k_cfg3);
 	amip4k_spi_set_cfg3(spi_device_handle_r, amip4k_cfg3);
-	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for sincos encoder config done
+	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for sincos config done
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "Reload count value of pre_st, reset all error flag, zstat IC left and right");
 	amip4k_spi_set_cmd(spi_device_handle_l, 0x01); // RESCNT 0b00000001
 	amip4k_spi_set_cmd(spi_device_handle_r, 0x01); // RESCNT 0b00000001
-	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for sincos encoder reset count done
+	vTaskDelay(pdMS_TO_TICKS(100)); // Essential wait for sincos reset count done
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg1: 0x%08X", amip4k_spi_get_cfg1(spi_device_handle_r));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg2: 0x%08X", amip4k_spi_get_cfg2(spi_device_handle_r));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_l));
 	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right cfg3: 0x%08X", amip4k_spi_get_cfg3(spi_device_handle_r)); 
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_left stat: 0x%04X", amip4k_spi_help_monitor(spi_device_handle_l));
+	ESP_LOGI(ICM42688_AMIP4K_SPI_TAG, "_right stat: 0x%04X", amip4k_spi_help_monitor(spi_device_handle_r));
 
 	ESP_LOGI(MASTER_I2C_TAG, "Allocate i2c master bus");
 	ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_master_bus_config, &i2c_master_bus_handle));
@@ -1360,6 +1379,7 @@ void app_main(void) {
 		(uint8_t) ((slave_di & 0x000080)>>7), (uint8_t) ((slave_di & 0x000040)>>6), (uint8_t) ((slave_di & 0x000020)>>5), (uint8_t) ((slave_di & 0x000010)>>4),
 		(uint8_t) ((slave_di & 0x000008)>>3), (uint8_t) ((slave_di & 0x000004)>>2), (uint8_t) ((slave_di & 0x000002)>>1), (uint8_t) ((slave_di & 0x000001)));
 		printf("Estop pulses interval count: %d   Left encoder: %ld   Right encoder: %ld\n", interval_count, left_counter_now, right_counter_now);
+		printf("AM-IP4k status: Left: %d   Right: %d\n", left_amip4k_stat, right_amip4k_stat);
 		printf("Acc_X: %f   Acc_Y: %f   Acc_Z: %f   Gyr_X: %f   Gyr_Y: %f   Gyr_Z: %f\n", accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
     } // back to while (1)
 }
